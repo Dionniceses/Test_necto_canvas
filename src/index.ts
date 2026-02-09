@@ -83,7 +83,7 @@ interface Batch {
     color: string;
 }
 
-let batchCount = 25000;
+let batchCount = 2500;
 let batches: Batch[] = [];
 
 function randomBoxBatch(now: number): Batch {
