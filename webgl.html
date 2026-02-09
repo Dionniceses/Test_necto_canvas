@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>WebGL Batch Test</title>
+  <style>
+    body { margin: 0; overflow: hidden; }
+    canvas { display: block; background: #111; }
+    #controls {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      background: rgba(0,0,0,0.7);
+      padding: 12px;
+      border-radius: 8px;
+      color: white;
+      font: 13px monospace;
+    }
+    #controls label {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    #controls input[type="number"] {
+      width: 80px;
+      padding: 3px 6px;
+      border: 1px solid #555;
+      border-radius: 4px;
+      background: #222;
+      color: white;
+      font: 13px monospace;
+    }
+    #controls button {
+      padding: 6px 12px;
+      border: none;
+      border-radius: 4px;
+      background: #3b82f6;
+      color: white;
+      font: bold 13px monospace;
+      cursor: pointer;
+    }
+    #controls button:hover { background: #2563eb; }
+    #zoom-level { font-size: 12px; opacity: 0.7; }
+    #renderer-tag {
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      color: #0f0;
+      font: bold 14px monospace;
+      z-index: 10;
+      background: rgba(0,0,0,0.5);
+      padding: 4px 8px;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+  <span id="renderer-tag">WebGL</span>
+  <div id="controls">
+    <label>Batches: <input id="input-batches" type="number" value="25000" min="0" step="1000"></label>
+    <label>Boxen: <input id="input-boxes" type="number" value="75" min="1" max="500" step="5"></label>
+    <button id="btn-apply">Toepassen</button>
+    <span id="zoom-level">Zoom: 100%</span>
+  </div>
+  <script type="module" src="./dist/webgl.js"></script>
+</body>
+</html>
