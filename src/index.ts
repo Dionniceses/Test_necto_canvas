@@ -1,5 +1,3 @@
-export {};
-
 const canvas = document.getElementById('canvas') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
 canvas.width = window.innerWidth;
@@ -83,7 +81,7 @@ interface Batch {
     color: string;
 }
 
-let batchCount = 2500;
+let batchCount = 25000;
 let batches: Batch[] = [];
 
 function randomBoxBatch(now: number): Batch {
