@@ -136,6 +136,16 @@ function createProgram(vs: string, fs: string): WebGLProgram {
 const circleProgram = createProgram(circleVS, circleFS);
 const rectProgram = createProgram(rectVS, rectFS);
 
+// === Cached uniform locations (avoid gl.getUniformLocation every frame) ===
+const u_rect_transform = gl.getUniformLocation(rectProgram, 'u_transform')!;
+const u_rect_resolution = gl.getUniformLocation(rectProgram, 'u_resolution')!;
+const u_circle_transform = gl.getUniformLocation(circleProgram, 'u_transform')!;
+const u_circle_resolution = gl.getUniformLocation(circleProgram, 'u_resolution')!;
+
+// Pre-allocated arrays reused every frame (avoid GC)
+const transformMat = new Float32Array(9);
+const resolutionVec = new Float32Array(2);
+
 // === Circle instanced rendering setup ===
 const circleVAO = gl.createVertexArray()!;
 gl.bindVertexArray(circleVAO);
@@ -268,6 +278,8 @@ const aOverlayTex = gl.getAttribLocation(overlayProgram, 'a_texCoord');
 gl.enableVertexAttribArray(aOverlayTex);
 gl.vertexAttribPointer(aOverlayTex, 2, gl.FLOAT, false, 4 * 4, 2 * 4);
 gl.bindVertexArray(null);
+
+const u_overlay_texture = gl.getUniformLocation(overlayProgram, 'u_texture');
 
 // === Color parse helper ===
 function hexToRgb(hex: string): [number, number, number] {
@@ -447,6 +459,8 @@ let batches: Batch[] = [];
 
 // Lijst van alle verbindingen (edges) om batches over te sturen
 let connectionEdges: [number, number][] = [];
+// Cached static line buffer (lines don't change between box regeneration)
+let cachedLineVertCount = 0;
 
 function buildConnectionEdges() {
     connectionEdges = [];
@@ -460,6 +474,33 @@ function buildConnectionEdges() {
             }
         }
     }
+    // Pre-build static line buffer
+    rebuildLineBuffer();
+}
+
+function rebuildLineBuffer() {
+    cachedLineVertCount = 0;
+    for (const [i, j] of connectionEdges) {
+        if (cachedLineVertCount + 2 > MAX_LINE_VERTS) break;
+        const off1 = cachedLineVertCount * 6;
+        lineVertexData[off1    ] = boxCenterX(boxes[i]);
+        lineVertexData[off1 + 1] = boxCenterY(boxes[i]);
+        lineVertexData[off1 + 2] = 1; lineVertexData[off1 + 3] = 1;
+        lineVertexData[off1 + 4] = 1; lineVertexData[off1 + 5] = 0.15;
+
+        const off2 = (cachedLineVertCount + 1) * 6;
+        lineVertexData[off2    ] = boxCenterX(boxes[j]);
+        lineVertexData[off2 + 1] = boxCenterY(boxes[j]);
+        lineVertexData[off2 + 2] = 1; lineVertexData[off2 + 3] = 1;
+        lineVertexData[off2 + 4] = 1; lineVertexData[off2 + 5] = 0.15;
+
+        cachedLineVertCount += 2;
+    }
+    // Upload once to GPU
+    gl.bindVertexArray(lineVAO);
+    gl.bindBuffer(gl.ARRAY_BUFFER, lineBuf);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, lineVertexData.subarray(0, cachedLineVertCount * 6));
+    gl.bindVertexArray(null);
 }
 
 function randomBoxBatch(now: number): Batch {
@@ -683,14 +724,19 @@ function findClickedLine(worldX: number, worldY: number): { from: Box, to: Box }
     return best;
 }
 
-// Vind aangeklikte batch (bolletje)
-let lastBatchPositions: { x: number, y: number, batch: Batch }[] = [];
+// Vind aangeklikte batch (bolletje) — pooled array to avoid GC
+const MAX_BATCH_POS = 200000;
+const batchPosPool: { x: number, y: number, batch: Batch | null }[] = [];
+for (let i = 0; i < 1000; i++) batchPosPool.push({ x: 0, y: 0, batch: null });
+let lastBatchPosCount = 0;
 
 function findClickedBatch(worldX: number, worldY: number): Batch | null {
     const threshold = 10 / zoomLevel;
-    for (const bp of lastBatchPositions) {
-        const dist = Math.hypot(worldX - bp.x, worldY - bp.y);
-        if (dist < threshold) return bp.batch;
+    const threshSq = threshold * threshold;
+    for (let i = 0; i < lastBatchPosCount; i++) {
+        const bp = batchPosPool[i];
+        const dx = worldX - bp.x, dy = worldY - bp.y;
+        if (dx * dx + dy * dy < threshSq) return bp.batch;
     }
     return null;
 }
@@ -898,13 +944,26 @@ let lastFpsTime = performance.now();
 let fps = 0;
 
 // === Helper: build transform matrix (column-major for uniform) ===
-function getTransformMatrix(): Float32Array {
-    // Transform = translate(panX, panY) * scale(zoom)
-    return new Float32Array([
-        zoomLevel, 0, 0,
-        0, zoomLevel, 0,
-        panX, panY, 1,
-    ]);
+function updateTransformMatrix(): void {
+    transformMat[0] = zoomLevel; transformMat[1] = 0; transformMat[2] = 0;
+    transformMat[3] = 0; transformMat[4] = zoomLevel; transformMat[5] = 0;
+    transformMat[6] = panX; transformMat[7] = panY; transformMat[8] = 1;
+}
+
+// === Frustum culling helper ===
+function isInView(x: number, y: number, margin: number): boolean {
+    const sx = x * zoomLevel + panX;
+    const sy = y * zoomLevel + panY;
+    return sx > -margin && sx < canvas.width + margin &&
+           sy > -margin && sy < canvas.height + margin;
+}
+
+function isBoxInView(box: Box): boolean {
+    const sx1 = box.x * zoomLevel + panX;
+    const sy1 = box.y * zoomLevel + panY;
+    const sx2 = (box.x + box.w) * zoomLevel + panX;
+    const sy2 = (box.y + box.h) * zoomLevel + panY;
+    return sx2 > 0 && sx1 < canvas.width && sy2 > 0 && sy1 < canvas.height;
 }
 
 // === Animate ===
@@ -922,17 +981,21 @@ function animate() {
     }
 
     if (!paused) {
-        // Remove finished batches + mogelijke error generatie
-        for (let i = batches.length - 1; i >= 0; i--) {
-            const progress = (now - batches[i].startTime) / batches[i].duration;
+        // Remove finished batches — swap-and-pop (O(1) per removal instead of O(n) splice)
+        let writeIdx = 0;
+        for (let i = 0; i < batches.length; i++) {
+            const b = batches[i];
+            const progress = (now - b.startTime) / b.duration;
             if (progress >= 1) {
-                // Kleine kans op error
                 if (Math.random() < ERROR_CHANCE) {
-                    addError(batches[i].fromIdx, batches[i].toIdx);
+                    addError(b.fromIdx, b.toIdx);
                 }
-                batches.splice(i, 1);
+                // Skip — don't copy to writeIdx
+            } else {
+                batches[writeIdx++] = b;
             }
         }
+        batches.length = writeIdx;
 
         // Spawn new
         const deficit = batchCount - batches.length;
@@ -953,13 +1016,14 @@ function animate() {
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-    const transform = getTransformMatrix();
-    const resolution = new Float32Array([canvas.width, canvas.height]);
+    updateTransformMatrix();
+    resolutionVec[0] = canvas.width;
+    resolutionVec[1] = canvas.height;
 
     // --- Draw boxes as rects ---
     gl.useProgram(rectProgram);
-    gl.uniformMatrix3fv(gl.getUniformLocation(rectProgram, 'u_transform'), false, transform);
-    gl.uniform2fv(gl.getUniformLocation(rectProgram, 'u_resolution'), resolution);
+    gl.uniformMatrix3fv(u_rect_transform, false, transformMat);
+    gl.uniform2fv(u_rect_resolution, resolutionVec);
 
     let rectCount = 0;
     for (let i = 0; i < boxes.length && rectCount < MAX_RECTS; i++) {
@@ -996,36 +1060,11 @@ function animate() {
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, rectVertexData.subarray(0, rectCount * 36));
     gl.drawArrays(gl.TRIANGLES, 0, rectCount * 6);
 
-    // --- Draw random lines between connected boxes ---
+    // --- Draw static lines (pre-built buffer, just draw) ---
     {
-        let lineVertCount = 0;
-        const drawn = new Set<string>();
-        for (let i = 0; i < boxes.length; i++) {
-            for (const j of boxes[i].connections) {
-                const key = i < j ? `${i}-${j}` : `${j}-${i}`;
-                if (drawn.has(key) || lineVertCount + 2 > MAX_LINE_VERTS) continue;
-                drawn.add(key);
-
-                const off1 = lineVertCount * 6;
-                lineVertexData[off1    ] = boxCenterX(boxes[i]);
-                lineVertexData[off1 + 1] = boxCenterY(boxes[i]);
-                lineVertexData[off1 + 2] = 1; lineVertexData[off1 + 3] = 1;
-                lineVertexData[off1 + 4] = 1; lineVertexData[off1 + 5] = 0.15;
-
-                const off2 = (lineVertCount + 1) * 6;
-                lineVertexData[off2    ] = boxCenterX(boxes[j]);
-                lineVertexData[off2 + 1] = boxCenterY(boxes[j]);
-                lineVertexData[off2 + 2] = 1; lineVertexData[off2 + 3] = 1;
-                lineVertexData[off2 + 4] = 1; lineVertexData[off2 + 5] = 0.15;
-
-                lineVertCount += 2;
-            }
-        }
-
         gl.bindVertexArray(lineVAO);
         gl.bindBuffer(gl.ARRAY_BUFFER, lineBuf);
-        gl.bufferSubData(gl.ARRAY_BUFFER, 0, lineVertexData.subarray(0, lineVertCount * 6));
-        gl.drawArrays(gl.LINES, 0, lineVertCount);
+        gl.drawArrays(gl.LINES, 0, cachedLineVertCount);
 
         // Highlight geselecteerde lijn
         if (activePopupLine) {
@@ -1048,12 +1087,13 @@ function animate() {
 
     // --- Draw circles (batches) instanced ---
     gl.useProgram(circleProgram);
-    gl.uniformMatrix3fv(gl.getUniformLocation(circleProgram, 'u_transform'), false, transform);
-    gl.uniform2fv(gl.getUniformLocation(circleProgram, 'u_resolution'), resolution);
+    gl.uniformMatrix3fv(u_circle_transform, false, transformMat);
+    gl.uniform2fv(u_circle_resolution, resolutionVec);
 
     let circleCount = 0;
     let activeCount = 0;
-    lastBatchPositions = [];
+    lastBatchPosCount = 0;
+    const cullMargin = 20; // px screen-space margin for culling
     for (let i = 0; i < batches.length && circleCount < MAX_CIRCLES; i++) {
         const batch = batches[i];
         const progress = (now - batch.startTime) / batch.duration;
@@ -1064,7 +1104,15 @@ function animate() {
         const x = batch.startX + (batch.endX - batch.startX) * p;
         const y = batch.startY + (batch.endY - batch.startY) * p;
 
-        lastBatchPositions.push({ x, y, batch });
+        // Frustum cull — skip batches not visible on screen
+        if (!isInView(x, y, cullMargin)) continue;
+
+        // Pool batch position for click detection
+        if (lastBatchPosCount >= batchPosPool.length) {
+            batchPosPool.push({ x: 0, y: 0, batch: null });
+        }
+        const bp = batchPosPool[lastBatchPosCount++];
+        bp.x = x; bp.y = y; bp.batch = batch;
 
         const off = circleCount * 7;
         circleInstanceData[off + 0] = x;
@@ -1111,6 +1159,7 @@ function animate() {
     overlayCtx.strokeStyle = 'white';
     overlayCtx.lineWidth = 2 / zoomLevel;
     for (const box of boxes) {
+        if (!isBoxInView(box)) continue; // Skip off-screen boxes
         overlayCtx.strokeRect(box.x, box.y, box.w, box.h);
         overlayCtx.fillText(box.label, boxCenterX(box), boxCenterY(box));
     }
@@ -1144,7 +1193,10 @@ function animate() {
 
     // Highlight geselecteerde batch
     if (activePopupBatch) {
-        const bp = lastBatchPositions.find(p => p.batch === activePopupBatch);
+        let bp: { x: number, y: number, batch: Batch | null } | undefined;
+        for (let i = 0; i < lastBatchPosCount; i++) {
+            if (batchPosPool[i].batch === activePopupBatch) { bp = batchPosPool[i]; break; }
+        }
         if (bp) {
             overlayCtx.save();
             overlayCtx.strokeStyle = '#ffcc00';
@@ -1212,7 +1264,7 @@ function animate() {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, overlayCanvas);
 
     gl.useProgram(overlayProgram);
-    gl.uniform1i(gl.getUniformLocation(overlayProgram, 'u_texture'), 0);
+    gl.uniform1i(u_overlay_texture, 0);
     gl.bindVertexArray(overlayVAO);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
 
