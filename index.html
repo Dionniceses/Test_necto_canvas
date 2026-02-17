@@ -2,15 +2,29 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Canvas Batch Test</title>
+  <title>WebGL Batch Test</title>
   <style>
-    body { margin: 0; overflow: hidden; }
-    canvas { display: block; background: #111; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0a0a0a; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+    #app {
+      position: relative;
+      width: 90vw;
+      height: 85vh;
+    }
+    #canvas-wrapper {
+      position: absolute;
+      inset: 0;
+      border: 2px solid #333;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    canvas { display: block; background: #111; width: 100%; height: 100%; }
     #controls {
-      position: fixed;
+      position: absolute;
       top: 10px;
       right: 10px;
       z-index: 10;
+      transition: right 0.25s ease;
       display: flex;
       flex-direction: column;
       gap: 8px;
@@ -19,6 +33,9 @@
       border-radius: 8px;
       color: white;
       font: 13px monospace;
+    }
+    #controls.shifted {
+      right: 330px;
     }
     #controls label {
       display: flex;
@@ -45,16 +62,108 @@
       cursor: pointer;
     }
     #controls button:hover { background: #2563eb; }
+    #controls button.paused { background: #ef4444; }
+    #controls button.paused:hover { background: #dc2626; }
     #zoom-level { font-size: 12px; opacity: 0.7; }
+    #renderer-tag {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: #0f0;
+      font: bold 14px monospace;
+      z-index: 10;
+      background: rgba(0,0,0,0.5);
+      padding: 4px 8px;
+      border-radius: 4px;
+    }
+
+    /* Sidebar — overlay rechts op het canvas */
+    #sidebar {
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 320px;
+      height: 100%;
+      background: rgba(20, 20, 34, 0.95);
+      border-left: 2px solid #333;
+      border-radius: 0 8px 8px 0;
+      display: flex;
+      flex-direction: column;
+      color: #e0e0e0;
+      font: 13px/1.7 monospace;
+      overflow-y: auto;
+      transform: translateX(0);
+      transition: transform 0.25s ease, opacity 0.2s ease;
+      z-index: 20;
+      backdrop-filter: blur(6px);
+    }
+    #sidebar.empty {
+      transform: translateX(100%);
+      pointer-events: none;
+      opacity: 0;
+    }
+    #sidebar-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 18px 12px;
+      border-bottom: 1px solid #2a2a3a;
+    }
+    #sidebar-header h3 {
+      margin: 0;
+      font-size: 15px;
+      color: white;
+    }
+    #sidebar-close {
+      background: none;
+      border: none;
+      color: #666;
+      font-size: 22px;
+      cursor: pointer;
+      padding: 0 4px;
+      line-height: 1;
+    }
+    #sidebar-close:hover { color: #ff4444; }
+    #sidebar-body {
+      padding: 14px 18px;
+      flex: 1;
+    }
+    #sidebar-body table { width: 100%; border-collapse: collapse; }
+    #sidebar-body td { padding: 5px 0; }
+    #sidebar-body td:first-child { color: #888; padding-right: 12px; }
+    #sidebar-body td:last-child { color: #fff; text-align: right; }
+    #sidebar-placeholder {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex: 1;
+      color: #555;
+      font-size: 12px;
+      text-align: center;
+      padding: 20px;
+    }
   </style>
 </head>
 <body>
-  <canvas id="canvas"></canvas>
-  <div id="controls">
-    <label>Batches: <input id="input-batches" type="number" value="25000" min="0" step="1000"></label>
-    <label>Boxen: <input id="input-boxes" type="number" value="75" min="1" max="500" step="5"></label>
-    <button id="btn-apply">Toepassen</button>
-    <span id="zoom-level">Zoom: 100%</span>
+  <div id="app">
+    <div id="canvas-wrapper">
+      <canvas id="canvas"></canvas>
+      <span id="renderer-tag">WebGL</span>
+      <div id="controls">
+        <label>Batches: <input id="input-batches" type="number" value="50" min="0" step="1000"></label>
+        <label>Boxen: <input id="input-boxes" type="number" value="75" min="1" max="500" step="5"></label>
+        <button id="btn-apply">Toepassen</button>      <button id="btn-pause">&#10074;&#10074; Pauze</button>        <span id="zoom-level">Zoom: 100%</span>
+      </div>
+    </div>
+    <div id="sidebar" class="empty">
+      <div id="sidebar-header" style="display:none">
+        <h3 id="sidebar-title"></h3>
+        <button id="sidebar-close">&times;</button>
+      </div>
+      <div id="sidebar-body">
+        <div id="sidebar-placeholder">Klik op een box of lijn<br>om details te zien</div>
+      </div>
+    </div>
   </div>
   <script type="module" src="./dist/index.js"></script>
 </body>
