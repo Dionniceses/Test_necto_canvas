@@ -1,0 +1,21 @@
+<div id="app">
+    <div id="canvas-wrapper">
+      <canvas id="canvas"></canvas>
+      <span id="renderer-tag">WebGL</span>
+      <div id="controls">
+        <label>Batches: <input id="input-batches" type="number" value="50" min="0" step="1000"></label>
+        <label>Boxen: <input id="input-boxes" type="number" value="75" min="1" max="500" step="5"></label>
+        <button id="btn-apply">Toepassen</button>      
+        <button id="btn-pause">&#10074;&#10074; Pauze</button>        <span id="zoom-level">Zoom: 100%</span>
+      </div>
+    </div>
+    <div id="sidebar" class="empty">
+      <div id="sidebar-header" style="display:none">
+        <h3 id="sidebar-title"></h3>
+        <button id="sidebar-close">&times;</button>
+      </div>
+      <div id="sidebar-body">
+        <div id="sidebar-placeholder">Klik op een box of lijn<br>om details te zien</div>
+      </div>
+    </div>
+</div>
