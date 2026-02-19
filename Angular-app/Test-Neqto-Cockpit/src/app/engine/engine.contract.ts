@@ -20,6 +20,7 @@ export interface EngineEvents {
 export interface EngineInitOptions {
   initialCounts?: Partial<EngineCounts>;
   events?: EngineEvents;
+  uncapFps?: boolean;
 }
 
 export interface EngineApi {

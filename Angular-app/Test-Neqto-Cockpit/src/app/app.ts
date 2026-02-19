@@ -69,6 +69,7 @@ export class App implements AfterViewInit, OnDestroy {
             batches: this.batchCount(),
             boxes: this.boxCount(),
           },
+          uncapFps: true,
           events: {
             onSelectionChange: (selection) => {
               this.ngZone.run(() => this.selection.set(selection));

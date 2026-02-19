@@ -149,6 +149,7 @@ export class CanvasEngine implements EngineApi {
   private rafId: number | null = null;
   private initialized = false;
   private lastHudEmitTime = 0;
+  private uncapFps = false;
 
   private gl: WebGL2RenderingContext | null = null;
   private overlayCanvas: HTMLCanvasElement | null = null;
@@ -209,7 +210,7 @@ export class CanvasEngine implements EngineApi {
   private pauseTimeOffset = 0;
   private pauseStartTime = 0;
 
-  private zoomLevel = 1;
+  private zoomLevel = 0.2;
   private panX = 0;
   private panY = 0;
   private worldW = 0;
@@ -237,6 +238,7 @@ export class CanvasEngine implements EngineApi {
 
     this.elements = elements;
     this.options = options ?? {};
+    this.uncapFps = this.options.uncapFps ?? false;
     this.counts = {
       batches: this.options.initialCounts?.batches ?? DEFAULT_BATCH_COUNT,
       boxes: this.options.initialCounts?.boxes ?? DEFAULT_BOX_COUNT,
@@ -262,13 +264,18 @@ export class CanvasEngine implements EngineApi {
       return;
     }
     this.running = true;
-    this.rafId = window.requestAnimationFrame(this.boundFrameHandler);
+    if (this.uncapFps) {
+      this.rafId = setTimeout(this.boundFrameHandler, 0) as unknown as number;
+    } else {
+      this.rafId = window.requestAnimationFrame(this.boundFrameHandler);
+    }
   }
 
   stop(): void {
     this.running = false;
     if (this.rafId !== null && typeof window !== 'undefined') {
       window.cancelAnimationFrame(this.rafId);
+      clearTimeout(this.rafId);
       this.rafId = null;
     }
   }
@@ -335,7 +342,11 @@ export class CanvasEngine implements EngineApi {
     this.renderFrame();
 
     if (typeof window !== 'undefined') {
-      this.rafId = window.requestAnimationFrame(this.boundFrameHandler);
+      if (this.uncapFps) {
+        this.rafId = setTimeout(this.boundFrameHandler, 0) as unknown as number;
+      } else {
+        this.rafId = window.requestAnimationFrame(this.boundFrameHandler);
+      }
     }
   }
 
@@ -599,7 +610,6 @@ export class CanvasEngine implements EngineApi {
     let circleCount = 0;
     let activeCount = 0;
     this.lastBatchPosCount = 0;
-    const cullMargin = 20;
 
     for (let index = 0; index < this.batches.length && circleCount < this.MAX_CIRCLES; index++) {
       const batch = this.batches[index];
@@ -612,10 +622,6 @@ export class CanvasEngine implements EngineApi {
       const p = Math.min(progress, 1);
       const x = batch.startX + (batch.endX - batch.startX) * p;
       const y = batch.startY + (batch.endY - batch.startY) * p;
-
-      if (!this.isInView(x, y, cullMargin)) {
-        continue;
-      }
 
       if (this.lastBatchPosCount >= this.batchPosPool.length) {
         this.batchPosPool.push({ x: 0, y: 0, batch: null });
