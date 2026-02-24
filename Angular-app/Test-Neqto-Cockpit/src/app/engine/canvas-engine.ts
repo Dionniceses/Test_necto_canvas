@@ -1165,7 +1165,7 @@ export class CanvasEngine implements EngineApi {
     }
 
     for (let index = 0; index < this.boxes.length; index++) {
-      const numConnections = 2 + Math.floor(Math.random() * 3);
+      const numConnections = 1 + Math.floor(Math.random() * 0);
       const available = Array.from({ length: this.boxes.length }, (_, k) => k).filter((k) => k !== index);
       for (let c = 0; c < numConnections && available.length > 0; c++) {
         const pick = Math.floor(Math.random() * available.length);

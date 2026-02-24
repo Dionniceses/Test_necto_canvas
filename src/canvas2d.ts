@@ -1,30 +1,18 @@
 export {};
 
 // =============================================
-// WebGL versie — zelfde functionaliteit als Canvas 2D
+// Canvas 2D versie — zelfde functionaliteit als WebGL
 // =============================================
 
 const wrapper = document.getElementById('canvas-wrapper')!;
 const canvas = document.getElementById('canvas') as HTMLCanvasElement;
-const gl = canvas.getContext('webgl2')!;
+const ctx = canvas.getContext('2d')!;
 canvas.width = wrapper.clientWidth;
 canvas.height = wrapper.clientHeight;
 
-if (!gl) {
-    alert('WebGL2 niet beschikbaar in deze browser');
-    throw new Error('No WebGL2');
-}
-
-// We need an offscreen 2D canvas for text rendering (box labels + HUD)
-const overlayCanvas = document.createElement('canvas');
-overlayCanvas.width = canvas.width;
-overlayCanvas.height = canvas.height;
-const overlayCtx = overlayCanvas.getContext('2d')!;
-
 // Popup container referentie
-let activePopup: HTMLElement | null = null;
 let activePopupBox: Box | null = null;
-let activePopupLine: { from: Box, to: Box } | null = null;
+let activePopupLine: { from: Box; to: Box } | null = null;
 
 // Sidebar elementen
 const sidebar = document.getElementById('sidebar')!;
@@ -32,260 +20,14 @@ const sidebarHeader = document.getElementById('sidebar-header')!;
 const sidebarTitle = document.getElementById('sidebar-title')!;
 const sidebarBody = document.getElementById('sidebar-body')!;
 const sidebarClose = document.getElementById('sidebar-close')!;
-const sidebarPlaceholder = document.getElementById('sidebar-placeholder')!;
 
 sidebarClose.addEventListener('click', () => closeSidebar());
 
-// === Shaders ===
-
-// Vertex shader for circles (instanced quads)
-const circleVS = `#version 300 es
-precision highp float;
-
-// Per-vertex (quad corners)
-in vec2 a_quadPos; // -1..1
-
-// Per-instance
-in vec2 a_center;
-in float a_radius;
-in vec4 a_color;
-
-uniform mat3 u_transform;
-uniform vec2 u_resolution;
-
-out vec4 v_color;
-out vec2 v_quadPos;
-
-void main() {
-    vec2 worldPos = a_center + a_quadPos * a_radius;
-    vec3 transformed = u_transform * vec3(worldPos, 1.0);
-    // Convert to clip space
-    vec2 clipPos = (transformed.xy / u_resolution) * 2.0 - 1.0;
-    clipPos.y = -clipPos.y; // flip Y
-    gl_Position = vec4(clipPos, 0.0, 1.0);
-    v_color = a_color;
-    v_quadPos = a_quadPos;
-}`;
-
-const circleFS = `#version 300 es
-precision highp float;
-
-in vec4 v_color;
-in vec2 v_quadPos;
-out vec4 fragColor;
-
-void main() {
-    float dist = length(v_quadPos);
-    if (dist > 1.0) discard;
-    fragColor = v_color;
-}`;
-
-// Vertex shader for boxes (filled rects)
-const rectVS = `#version 300 es
-precision highp float;
-
-in vec2 a_position;
-in vec4 a_color;
-
-uniform mat3 u_transform;
-uniform vec2 u_resolution;
-
-out vec4 v_color;
-
-void main() {
-    vec3 transformed = u_transform * vec3(a_position, 1.0);
-    vec2 clipPos = (transformed.xy / u_resolution) * 2.0 - 1.0;
-    clipPos.y = -clipPos.y;
-    gl_Position = vec4(clipPos, 0.0, 1.0);
-    v_color = a_color;
-}`;
-
-const rectFS = `#version 300 es
-precision highp float;
-in vec4 v_color;
-out vec4 fragColor;
-void main() {
-    fragColor = v_color;
-}`;
-
-// === Shader compilation helpers ===
-function compileShader(src: string, type: number): WebGLShader {
-    const shader = gl.createShader(type)!;
-    gl.shaderSource(shader, src);
-    gl.compileShader(shader);
-    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-        console.error(gl.getShaderInfoLog(shader));
-        throw new Error('Shader compile error');
-    }
-    return shader;
-}
-
-function createProgram(vs: string, fs: string): WebGLProgram {
-    const program = gl.createProgram()!;
-    gl.attachShader(program, compileShader(vs, gl.VERTEX_SHADER));
-    gl.attachShader(program, compileShader(fs, gl.FRAGMENT_SHADER));
-    gl.linkProgram(program);
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-        console.error(gl.getProgramInfoLog(program));
-        throw new Error('Program link error');
-    }
-    return program;
-}
-
-// === Programs ===
-const circleProgram = createProgram(circleVS, circleFS);
-const rectProgram = createProgram(rectVS, rectFS);
-
-// === Cached uniform locations (avoid gl.getUniformLocation every frame) ===
-const u_rect_transform = gl.getUniformLocation(rectProgram, 'u_transform')!;
-const u_rect_resolution = gl.getUniformLocation(rectProgram, 'u_resolution')!;
-const u_circle_transform = gl.getUniformLocation(circleProgram, 'u_transform')!;
-const u_circle_resolution = gl.getUniformLocation(circleProgram, 'u_resolution')!;
-
-// Pre-allocated arrays reused every frame (avoid GC)
-const transformMat = new Float32Array(9);
-const resolutionVec = new Float32Array(2);
-
-// === Circle instanced rendering setup ===
-const circleVAO = gl.createVertexArray()!;
-gl.bindVertexArray(circleVAO);
-
-// Quad vertices (2 triangles)
-const quadVerts = new Float32Array([
-    -1, -1,  1, -1,  -1, 1,
-    -1, 1,   1, -1,   1, 1,
-]);
-const quadBuf = gl.createBuffer()!;
-gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
-gl.bufferData(gl.ARRAY_BUFFER, quadVerts, gl.STATIC_DRAW);
-const aQuadPos = gl.getAttribLocation(circleProgram, 'a_quadPos');
-gl.enableVertexAttribArray(aQuadPos);
-gl.vertexAttribPointer(aQuadPos, 2, gl.FLOAT, false, 0, 0);
-
-// Instance buffers
-// Layout: centerX, centerY, radius, r, g, b, a  = 7 floats per instance
-const MAX_CIRCLES = 500000;
-const circleInstanceData = new Float32Array(MAX_CIRCLES * 7);
-const circleInstanceBuf = gl.createBuffer()!;
-gl.bindBuffer(gl.ARRAY_BUFFER, circleInstanceBuf);
-gl.bufferData(gl.ARRAY_BUFFER, circleInstanceData.byteLength, gl.DYNAMIC_DRAW);
-
-const aCenter = gl.getAttribLocation(circleProgram, 'a_center');
-gl.enableVertexAttribArray(aCenter);
-gl.vertexAttribPointer(aCenter, 2, gl.FLOAT, false, 7 * 4, 0);
-gl.vertexAttribDivisor(aCenter, 1);
-
-const aRadius = gl.getAttribLocation(circleProgram, 'a_radius');
-gl.enableVertexAttribArray(aRadius);
-gl.vertexAttribPointer(aRadius, 1, gl.FLOAT, false, 7 * 4, 2 * 4);
-gl.vertexAttribDivisor(aRadius, 1);
-
-const aCircleColor = gl.getAttribLocation(circleProgram, 'a_color');
-gl.enableVertexAttribArray(aCircleColor);
-gl.vertexAttribPointer(aCircleColor, 4, gl.FLOAT, false, 7 * 4, 3 * 4);
-gl.vertexAttribDivisor(aCircleColor, 1);
-
-gl.bindVertexArray(null);
-
-// === Rect rendering setup ===
-const rectVAO = gl.createVertexArray()!;
-gl.bindVertexArray(rectVAO);
-
-// We'll fill rect data each frame: x, y, r, g, b, a = 6 floats per vertex, 6 verts per rect
-const MAX_RECTS = 1000;
-const rectVertexData = new Float32Array(MAX_RECTS * 6 * 6);
-const rectBuf = gl.createBuffer()!;
-gl.bindBuffer(gl.ARRAY_BUFFER, rectBuf);
-gl.bufferData(gl.ARRAY_BUFFER, rectVertexData.byteLength, gl.DYNAMIC_DRAW);
-
-const aRectPos = gl.getAttribLocation(rectProgram, 'a_position');
-gl.enableVertexAttribArray(aRectPos);
-gl.vertexAttribPointer(aRectPos, 2, gl.FLOAT, false, 6 * 4, 0);
-
-const aRectColor = gl.getAttribLocation(rectProgram, 'a_color');
-gl.enableVertexAttribArray(aRectColor);
-gl.vertexAttribPointer(aRectColor, 4, gl.FLOAT, false, 6 * 4, 2 * 4);
-
-gl.bindVertexArray(null);
-
-// === Line rendering setup (reuses rectProgram shaders) ===
-const lineVAO = gl.createVertexArray()!;
-gl.bindVertexArray(lineVAO);
-
-const MAX_LINE_VERTS = 50000;
-const lineVertexData = new Float32Array(MAX_LINE_VERTS * 6);
-const lineBuf = gl.createBuffer()!;
-gl.bindBuffer(gl.ARRAY_BUFFER, lineBuf);
-gl.bufferData(gl.ARRAY_BUFFER, lineVertexData.byteLength, gl.DYNAMIC_DRAW);
-
-const aLinePos = gl.getAttribLocation(rectProgram, 'a_position');
-gl.enableVertexAttribArray(aLinePos);
-gl.vertexAttribPointer(aLinePos, 2, gl.FLOAT, false, 6 * 4, 0);
-
-const aLineColor = gl.getAttribLocation(rectProgram, 'a_color');
-gl.enableVertexAttribArray(aLineColor);
-gl.vertexAttribPointer(aLineColor, 4, gl.FLOAT, false, 6 * 4, 2 * 4);
-
-gl.bindVertexArray(null);
-
-// === Overlay texture for text ===
-const overlayTexture = gl.createTexture()!;
-gl.bindTexture(gl.TEXTURE_2D, overlayTexture);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-
-const overlayVS = `#version 300 es
-precision highp float;
-in vec2 a_position;
-in vec2 a_texCoord;
-out vec2 v_texCoord;
-void main() {
-    gl_Position = vec4(a_position, 0.0, 1.0);
-    v_texCoord = a_texCoord;
-}`;
-
-const overlayFS = `#version 300 es
-precision highp float;
-in vec2 v_texCoord;
-uniform sampler2D u_texture;
-out vec4 fragColor;
-void main() {
-    fragColor = texture(u_texture, v_texCoord);
-}`;
-
-const overlayProgram = createProgram(overlayVS, overlayFS);
-const overlayVAO = gl.createVertexArray()!;
-gl.bindVertexArray(overlayVAO);
-
-// Fullscreen quad
-const overlayQuad = new Float32Array([
-    // pos       texcoord
-    -1, -1,      0, 1,
-     1, -1,      1, 1,
-    -1,  1,      0, 0,
-    -1,  1,      0, 0,
-     1, -1,      1, 1,
-     1,  1,      1, 0,
-]);
-const overlayQuadBuf = gl.createBuffer()!;
-gl.bindBuffer(gl.ARRAY_BUFFER, overlayQuadBuf);
-gl.bufferData(gl.ARRAY_BUFFER, overlayQuad, gl.STATIC_DRAW);
-const aOverlayPos = gl.getAttribLocation(overlayProgram, 'a_position');
-gl.enableVertexAttribArray(aOverlayPos);
-gl.vertexAttribPointer(aOverlayPos, 2, gl.FLOAT, false, 4 * 4, 0);
-const aOverlayTex = gl.getAttribLocation(overlayProgram, 'a_texCoord');
-gl.enableVertexAttribArray(aOverlayTex);
-gl.vertexAttribPointer(aOverlayTex, 2, gl.FLOAT, false, 4 * 4, 2 * 4);
-gl.bindVertexArray(null);
-
-const u_overlay_texture = gl.getUniformLocation(overlayProgram, 'u_texture');
-
 // === Color parse helper ===
 function hexToRgb(hex: string): [number, number, number] {
-    const r = parseInt(hex.slice(1, 3), 16) / 255;
-    const g = parseInt(hex.slice(3, 5), 16) / 255;
-    const b = parseInt(hex.slice(5, 7), 16) / 255;
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
     return [r, g, b];
 }
 
@@ -298,7 +40,7 @@ interface Box {
     label: string;
     color: string;
     rgb: [number, number, number];
-    connections: number[]; // indices of connected boxes
+    connections: number[];
 }
 
 const BOX_W = 70;
@@ -320,11 +62,16 @@ let boxes: Box[] = [];
 const WORLD_W = canvas.width * 5;
 const WORLD_H = canvas.height * 5;
 
-function boxesOverlap(a: {x:number,y:number,w:number,h:number}, b: {x:number,y:number,w:number,h:number}): boolean {
-    return !(a.x + a.w + BOX_SPACING < b.x ||
-             b.x + b.w + BOX_SPACING < a.x ||
-             a.y + a.h + BOX_SPACING < b.y ||
-             b.y + b.h + BOX_SPACING < a.y);
+function boxesOverlap(
+    a: { x: number; y: number; w: number; h: number },
+    b: { x: number; y: number; w: number; h: number }
+): boolean {
+    return !(
+        a.x + a.w + BOX_SPACING < b.x ||
+        b.x + b.w + BOX_SPACING < a.x ||
+        a.y + a.h + BOX_SPACING < b.y ||
+        b.y + b.h + BOX_SPACING < a.y
+    );
 }
 
 function generateBoxes(count: number) {
@@ -338,7 +85,7 @@ function generateBoxes(count: number) {
             const x = Math.random() * (WORLD_W - w);
             const y = Math.random() * (WORLD_H - h);
             const candidate = { x, y, w, h };
-            if (!boxes.some(b => boxesOverlap(candidate, b))) {
+            if (!boxes.some((b) => boxesOverlap(candidate, b))) {
                 const color = boxColors[i % boxColors.length];
                 boxes.push({
                     x, y, w, h,
@@ -354,10 +101,9 @@ function generateBoxes(count: number) {
         if (!placed) break;
     }
 
-    // Genereer random verbindingen (2-4 per box, niet naar zichzelf)
     for (let i = 0; i < boxes.length; i++) {
-        const numConnections = 2 + Math.floor(Math.random() * 3); // 2-4
-        const available = Array.from({length: boxes.length}, (_, k) => k).filter(k => k !== i);
+        const numConnections = 2 + Math.floor(Math.random() * 3);
+        const available = Array.from({ length: boxes.length }, (_, k) => k).filter((k) => k !== i);
         for (let c = 0; c < numConnections && available.length > 0; c++) {
             const pick = Math.floor(Math.random() * available.length);
             const target = available[pick];
@@ -365,7 +111,6 @@ function generateBoxes(count: number) {
             if (!boxes[i].connections.includes(target)) {
                 boxes[i].connections.push(target);
             }
-            // Maak bidirectioneel
             if (!boxes[target].connections.includes(i)) {
                 boxes[target].connections.push(i);
             }
@@ -409,25 +154,18 @@ interface BoxErrors {
 }
 
 let errorIdCounter = 0;
-const ERROR_CHANCE = 0.003; // 0.3% kans per voltooide batch
+const ERROR_CHANCE = 0.003;
 const errorMessages = [
-    'Timeout exceeded',
-    'Connection refused',
-    'Data corruption detected',
-    'Buffer overflow',
-    'Authentication failed',
-    'Rate limit exceeded',
-    'Checksum mismatch',
-    'Service unavailable',
-    'Packet loss detected',
+    'Timeout exceeded', 'Connection refused', 'Data corruption detected',
+    'Buffer overflow', 'Authentication failed', 'Rate limit exceeded',
+    'Checksum mismatch', 'Service unavailable', 'Packet loss detected',
     'Memory allocation error',
 ];
 const errorSeverities = ['Low', 'Medium', 'High', 'Critical'];
 
 let boxErrorsMap: Map<number, BoxErrors> = new Map();
 
-function getErrorPosition(box: Box): { x: number, y: number } {
-    // Positie net buiten de box (rechts-boven)
+function getErrorPosition(box: Box): { x: number; y: number } {
     return { x: box.x + box.w + 10, y: box.y - 5 };
 }
 
@@ -448,7 +186,6 @@ function addError(fromIdx: number, toIdx: number) {
     }
     boxErrorsMap.get(toIdx)!.entries.push(entry);
 
-    // Live update sidebar als deze box open staat
     if (activePopupErrors && activePopupErrors.boxIdx === toIdx) {
         refreshErrorSidebar(activePopupErrors);
     }
@@ -457,10 +194,7 @@ function addError(fromIdx: number, toIdx: number) {
 let batchCount = 50;
 let batches: Batch[] = [];
 
-// Lijst van alle verbindingen (edges) om batches over te sturen
 let connectionEdges: [number, number][] = [];
-// Cached static line buffer (lines don't change between box regeneration)
-let cachedLineVertCount = 0;
 
 function buildConnectionEdges() {
     connectionEdges = [];
@@ -474,41 +208,11 @@ function buildConnectionEdges() {
             }
         }
     }
-    // Pre-build static line buffer
-    rebuildLineBuffer();
-}
-
-function rebuildLineBuffer() {
-    cachedLineVertCount = 0;
-    for (const [i, j] of connectionEdges) {
-        if (cachedLineVertCount + 2 > MAX_LINE_VERTS) break;
-        const off1 = cachedLineVertCount * 6;
-        lineVertexData[off1    ] = boxCenterX(boxes[i]);
-        lineVertexData[off1 + 1] = boxCenterY(boxes[i]);
-        lineVertexData[off1 + 2] = 1; lineVertexData[off1 + 3] = 1;
-        lineVertexData[off1 + 4] = 1; lineVertexData[off1 + 5] = 0.15;
-
-        const off2 = (cachedLineVertCount + 1) * 6;
-        lineVertexData[off2    ] = boxCenterX(boxes[j]);
-        lineVertexData[off2 + 1] = boxCenterY(boxes[j]);
-        lineVertexData[off2 + 2] = 1; lineVertexData[off2 + 3] = 1;
-        lineVertexData[off2 + 4] = 1; lineVertexData[off2 + 5] = 0.15;
-
-        cachedLineVertCount += 2;
-    }
-    // Upload once to GPU
-    gl.bindVertexArray(lineVAO);
-    gl.bindBuffer(gl.ARRAY_BUFFER, lineBuf);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, lineVertexData.subarray(0, cachedLineVertCount * 6));
-    gl.bindVertexArray(null);
 }
 
 function randomBoxBatch(now: number): Batch {
-    // Kies een willekeurige verbinding
     const edge = connectionEdges[Math.floor(Math.random() * connectionEdges.length)];
-    // Willekeurige richting
     const [fromIdx, toIdx] = Math.random() < 0.5 ? [edge[0], edge[1]] : [edge[1], edge[0]];
-
     const from = boxes[fromIdx];
     const to = boxes[toIdx];
 
@@ -608,17 +312,14 @@ canvas.addEventListener('wheel', (e) => {
     const mouseY = (e.offsetY - panY) / zoomLevel;
 
     zoomLevel = newZoom;
-
     panX = e.offsetX - mouseX * zoomLevel;
     panY = e.offsetY - mouseY * zoomLevel;
-
     updateZoomLabel();
 }, { passive: false });
 
 let isDragging = false;
 let dragStartX = 0;
 let dragStartY = 0;
-
 let mouseDownX = 0;
 let mouseDownY = 0;
 
@@ -648,7 +349,6 @@ canvas.addEventListener('mouseup', (e) => {
     canvas.style.cursor = 'grab';
 
     if (!wasDrag) {
-        // Klik: check of er een box is aangeklikt
         const rect = canvas.getBoundingClientRect();
         const clickScreenX = e.clientX - rect.left;
         const clickScreenY = e.clientY - rect.top;
@@ -667,17 +367,14 @@ canvas.addEventListener('mouseup', (e) => {
         if (clickedBox) {
             openBoxPopup(clickedBox, clickScreenX, clickScreenY);
         } else {
-            // Check error bolletjes
             const clickedError = findClickedError(worldX, worldY);
             if (clickedError) {
                 openErrorPopup(clickedError);
             } else {
-                // Check batch bolletjes
                 const clickedBatch = findClickedBatch(worldX, worldY);
                 if (clickedBatch) {
                     openBatchPopup(clickedBatch);
                 } else {
-                    // Check lijnen
                     const clickedLine = findClickedLine(worldX, worldY);
                     if (clickedLine) {
                         openLinePopup(clickedLine.from, clickedLine.to, clickScreenX, clickScreenY);
@@ -701,7 +398,6 @@ canvas.style.cursor = 'grab';
 const mockStatuses = ['Active', 'Idle', 'Processing', 'Waiting', 'Complete'];
 const mockTypes = ['Sensor', 'Controller', 'Gateway', 'Relay', 'Hub'];
 
-// Afstand van punt naar lijnsegment
 function pointToSegmentDist(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
     const dx = bx - ax, dy = by - ay;
     const lenSq = dx * dx + dy * dy;
@@ -711,10 +407,10 @@ function pointToSegmentDist(px: number, py: number, ax: number, ay: number, bx: 
     return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
 }
 
-function findClickedLine(worldX: number, worldY: number): { from: Box, to: Box } | null {
+function findClickedLine(worldX: number, worldY: number): { from: Box; to: Box } | null {
     const threshold = 8 / zoomLevel;
     const drawn = new Set<string>();
-    let best: { from: Box, to: Box, dist: number } | null = null;
+    let best: { from: Box; to: Box; dist: number } | null = null;
     for (let i = 0; i < boxes.length; i++) {
         for (const j of boxes[i].connections) {
             const key = i < j ? `${i}-${j}` : `${j}-${i}`;
@@ -733,9 +429,8 @@ function findClickedLine(worldX: number, worldY: number): { from: Box, to: Box }
     return best;
 }
 
-// Vind aangeklikte batch (bolletje) — pooled array to avoid GC
-const MAX_BATCH_POS = 200000;
-const batchPosPool: { x: number, y: number, batch: Batch | null }[] = [];
+// Batch position pool for click detection
+const batchPosPool: { x: number; y: number; batch: Batch | null }[] = [];
 for (let i = 0; i < 1000; i++) batchPosPool.push({ x: 0, y: 0, batch: null });
 let lastBatchPosCount = 0;
 
@@ -750,7 +445,6 @@ function findClickedBatch(worldX: number, worldY: number): Batch | null {
     return null;
 }
 
-// Vind aangeklikte error bolletje
 function findClickedError(worldX: number, worldY: number): BoxErrors | null {
     const threshold = 12 / zoomLevel;
     for (const [, err] of boxErrorsMap) {
@@ -761,14 +455,13 @@ function findClickedError(worldX: number, worldY: number): BoxErrors | null {
 }
 
 function getMockData(box: Box) {
-    // Deterministic mock data gebaseerd op label
     const seed = box.label.charCodeAt(0);
     return {
         type: mockTypes[seed % mockTypes.length],
         status: mockStatuses[seed % mockStatuses.length],
-        throughput: `${(seed * 37 % 900 + 100)} msg/s`,
-        latency: `${(seed * 13 % 50 + 5)} ms`,
-        uptime: `${(seed * 7 % 99 + 1)}%`,
+        throughput: `${(seed * 37) % 900 + 100} msg/s`,
+        latency: `${(seed * 13) % 50 + 5} ms`,
+        uptime: `${(seed * 7) % 99 + 1}%`,
         connections: box.connections.length,
         lastSeen: `${seed % 60}s ago`,
     };
@@ -795,11 +488,7 @@ function openSidebar() {
 
 const closeSidebar = closePopup;
 
-function updatePopupPosition() {
-    // Niet meer nodig — sidebar staat vast
-}
-
-function openBoxPopup(box: Box, screenX: number, screenY: number) {
+function openBoxPopup(box: Box, _screenX: number, _screenY: number) {
     closePopup();
 
     const CLICK_ZOOM = 3;
@@ -835,7 +524,7 @@ function openBoxPopup(box: Box, screenX: number, screenY: number) {
     activePopupBox = box;
 }
 
-function openLinePopup(from: Box, to: Box, screenX: number, screenY: number) {
+function openLinePopup(from: Box, to: Box, _screenX: number, _screenY: number) {
     closePopup();
 
     const CLICK_ZOOM = 3;
@@ -871,7 +560,6 @@ function openLinePopup(from: Box, to: Box, screenX: number, screenY: number) {
     activePopupLine = { from, to };
 }
 
-// === Batch popup ===
 let activePopupBatch: Batch | null = null;
 
 function openBatchPopup(batch: Batch) {
@@ -894,7 +582,6 @@ function openBatchPopup(batch: Batch) {
     activePopupBatch = batch;
 }
 
-// === Error popup ===
 let activePopupErrors: BoxErrors | null = null;
 
 function refreshErrorSidebar(errors: BoxErrors) {
@@ -905,7 +592,7 @@ function refreshErrorSidebar(errors: BoxErrors) {
         severityCount[e.severity] = (severityCount[e.severity] || 0) + 1;
     }
 
-    let errListHtml = errors.entries.slice(-20).reverse().map(e => {
+    const errListHtml = errors.entries.slice(-20).reverse().map((e) => {
         const sevColor = e.severity === 'Critical' ? '#ef4444' : e.severity === 'High' ? '#f97316' : e.severity === 'Medium' ? '#facc15' : '#84cc16';
         const time = new Date(e.timestamp).toLocaleTimeString();
         return `<div style="margin-bottom:8px;padding:6px 8px;background:#1a1a2e;border-radius:4px;border-left:3px solid ${sevColor}">
@@ -952,14 +639,7 @@ let frameCount = 0;
 let lastFpsTime = performance.now();
 let fps = 0;
 
-// === Helper: build transform matrix (column-major for uniform) ===
-function updateTransformMatrix(): void {
-    transformMat[0] = zoomLevel; transformMat[1] = 0; transformMat[2] = 0;
-    transformMat[3] = 0; transformMat[4] = zoomLevel; transformMat[5] = 0;
-    transformMat[6] = panX; transformMat[7] = panY; transformMat[8] = 1;
-}
-
-// === Frustum culling helper ===
+// === Frustum culling ===
 function isInView(x: number, y: number, margin: number): boolean {
     const sx = x * zoomLevel + panX;
     const sy = y * zoomLevel + panY;
@@ -981,7 +661,6 @@ function animate() {
     const realNow = performance.now();
     const now = paused ? pauseStartTime - pauseTimeOffset : realNow - pauseTimeOffset;
 
-    // FPS (altijd tellen)
     frameCount++;
     if (realNow - lastFpsTime >= 1000) {
         fps = frameCount;
@@ -990,7 +669,6 @@ function animate() {
     }
 
     if (!paused) {
-        // Remove finished batches — swap-and-pop (O(1) per removal instead of O(n) splice)
         let writeIdx = 0;
         for (let i = 0; i < batches.length; i++) {
             const b = batches[i];
@@ -999,14 +677,12 @@ function animate() {
                 if (Math.random() < ERROR_CHANCE) {
                     addError(b.fromIdx, b.toIdx);
                 }
-                // Skip — don't copy to writeIdx
             } else {
                 batches[writeIdx++] = b;
             }
         }
         batches.length = writeIdx;
 
-        // Spawn new
         const deficit = batchCount - batches.length;
         const spawnCount = deficit > 0
             ? Math.max(1, Math.floor(deficit * 0.1))
@@ -1018,91 +694,85 @@ function animate() {
         }
     }
 
-    // === WebGL rendering ===
-    gl.viewport(0, 0, canvas.width, canvas.height);
-    gl.clearColor(0.067, 0.067, 0.067, 1);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    // === Canvas 2D rendering ===
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    updateTransformMatrix();
-    resolutionVec[0] = canvas.width;
-    resolutionVec[1] = canvas.height;
+    ctx.save();
+    ctx.translate(panX, panY);
+    ctx.scale(zoomLevel, zoomLevel);
 
-    // --- Draw boxes as rects ---
-    gl.useProgram(rectProgram);
-    gl.uniformMatrix3fv(u_rect_transform, false, transformMat);
-    gl.uniform2fv(u_rect_resolution, resolutionVec);
-
-    let rectCount = 0;
-    for (let i = 0; i < boxes.length && rectCount < MAX_RECTS; i++) {
-        const box = boxes[i];
-        const [r, g, b] = box.rgb;
-        const off = rectCount * 36; // 6 verts * 6 floats
-        const x1 = box.x, y1 = box.y, x2 = box.x + box.w, y2 = box.y + box.h;
-
-        // Triangle 1
-        rectVertexData[off + 0] = x1; rectVertexData[off + 1] = y1;
-        rectVertexData[off + 2] = r; rectVertexData[off + 3] = g; rectVertexData[off + 4] = b; rectVertexData[off + 5] = 1;
-
-        rectVertexData[off + 6] = x2; rectVertexData[off + 7] = y1;
-        rectVertexData[off + 8] = r; rectVertexData[off + 9] = g; rectVertexData[off + 10] = b; rectVertexData[off + 11] = 1;
-
-        rectVertexData[off + 12] = x1; rectVertexData[off + 13] = y2;
-        rectVertexData[off + 14] = r; rectVertexData[off + 15] = g; rectVertexData[off + 16] = b; rectVertexData[off + 17] = 1;
-
-        // Triangle 2
-        rectVertexData[off + 18] = x1; rectVertexData[off + 19] = y2;
-        rectVertexData[off + 20] = r; rectVertexData[off + 21] = g; rectVertexData[off + 22] = b; rectVertexData[off + 23] = 1;
-
-        rectVertexData[off + 24] = x2; rectVertexData[off + 25] = y1;
-        rectVertexData[off + 26] = r; rectVertexData[off + 27] = g; rectVertexData[off + 28] = b; rectVertexData[off + 29] = 1;
-
-        rectVertexData[off + 30] = x2; rectVertexData[off + 31] = y2;
-        rectVertexData[off + 32] = r; rectVertexData[off + 33] = g; rectVertexData[off + 34] = b; rectVertexData[off + 35] = 1;
-
-        rectCount++;
-    }
-
-    gl.bindVertexArray(rectVAO);
-    gl.bindBuffer(gl.ARRAY_BUFFER, rectBuf);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, rectVertexData.subarray(0, rectCount * 36));
-    gl.drawArrays(gl.TRIANGLES, 0, rectCount * 6);
-
-    // --- Draw static lines (pre-built buffer, just draw) ---
-    {
-        gl.bindVertexArray(lineVAO);
-        gl.bindBuffer(gl.ARRAY_BUFFER, lineBuf);
-        gl.drawArrays(gl.LINES, 0, cachedLineVertCount);
-
-        // Highlight geselecteerde lijn
-        if (activePopupLine) {
-            const hlOff = 0;
-            lineVertexData[hlOff    ] = boxCenterX(activePopupLine.from);
-            lineVertexData[hlOff + 1] = boxCenterY(activePopupLine.from);
-            lineVertexData[hlOff + 2] = 1; lineVertexData[hlOff + 3] = 0.9;
-            lineVertexData[hlOff + 4] = 0; lineVertexData[hlOff + 5] = 0.9;
-
-            lineVertexData[hlOff + 6] = boxCenterX(activePopupLine.to);
-            lineVertexData[hlOff + 7] = boxCenterY(activePopupLine.to);
-            lineVertexData[hlOff + 8] = 1; lineVertexData[hlOff + 9] = 0.9;
-            lineVertexData[hlOff + 10] = 0; lineVertexData[hlOff + 11] = 0.9;
-
-            gl.bufferSubData(gl.ARRAY_BUFFER, 0, lineVertexData.subarray(0, 12));
-            gl.lineWidth(1);
-            gl.drawArrays(gl.LINES, 0, 2);
+    // --- Draw connection lines ---
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+    ctx.lineWidth = 1 / zoomLevel;
+    const drawnLines = new Set<string>();
+    for (let i = 0; i < boxes.length; i++) {
+        for (const j of boxes[i].connections) {
+            const key = i < j ? `${i}-${j}` : `${j}-${i}`;
+            if (drawnLines.has(key)) continue;
+            drawnLines.add(key);
+            ctx.beginPath();
+            ctx.moveTo(boxCenterX(boxes[i]), boxCenterY(boxes[i]));
+            ctx.lineTo(boxCenterX(boxes[j]), boxCenterY(boxes[j]));
+            ctx.stroke();
         }
     }
 
-    // --- Draw circles (batches) instanced ---
-    gl.useProgram(circleProgram);
-    gl.uniformMatrix3fv(u_circle_transform, false, transformMat);
-    gl.uniform2fv(u_circle_resolution, resolutionVec);
+    // --- Highlight selected line ---
+    if (activePopupLine) {
+        ctx.save();
+        ctx.strokeStyle = '#ffcc00';
+        ctx.lineWidth = 2.5 / zoomLevel;
+        ctx.shadowColor = '#ffcc00';
+        ctx.shadowBlur = 10 / zoomLevel;
+        ctx.beginPath();
+        ctx.moveTo(boxCenterX(activePopupLine.from), boxCenterY(activePopupLine.from));
+        ctx.lineTo(boxCenterX(activePopupLine.to), boxCenterY(activePopupLine.to));
+        ctx.stroke();
+        ctx.restore();
+    }
 
-    let circleCount = 0;
+    // --- Draw boxes ---
+    ctx.font = 'bold 11px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    for (const box of boxes) {
+        if (!isBoxInView(box)) continue;
+
+        // Fill
+        ctx.fillStyle = box.color;
+        ctx.fillRect(box.x, box.y, box.w, box.h);
+
+        // Border
+        ctx.strokeStyle = 'white';
+        ctx.lineWidth = 2 / zoomLevel;
+        ctx.strokeRect(box.x, box.y, box.w, box.h);
+
+        // Label
+        ctx.fillStyle = 'white';
+        ctx.fillText(box.label, boxCenterX(box), boxCenterY(box));
+    }
+
+    // --- Highlight selected box ---
+    if (activePopupBox) {
+        const b = activePopupBox;
+        const pad = 4;
+        ctx.save();
+        ctx.strokeStyle = '#ffcc00';
+        ctx.lineWidth = 3 / zoomLevel;
+        ctx.shadowColor = '#ffcc00';
+        ctx.shadowBlur = 12 / zoomLevel;
+        ctx.strokeRect(b.x - pad, b.y - pad, b.w + pad * 2, b.h + pad * 2);
+        ctx.restore();
+    }
+
+    // --- Draw batch circles ---
     let activeCount = 0;
     lastBatchPosCount = 0;
-    for (let i = 0; i < batches.length && circleCount < MAX_CIRCLES; i++) {
+
+    for (let i = 0; i < batches.length; i++) {
         const batch = batches[i];
         const progress = (now - batch.startTime) / batch.duration;
         if (progress < 0 || progress >= 1) continue;
@@ -1119,163 +789,79 @@ function animate() {
         const bp = batchPosPool[lastBatchPosCount++];
         bp.x = x; bp.y = y; bp.batch = batch;
 
-        const off = circleCount * 7;
-        circleInstanceData[off + 0] = x;
-        circleInstanceData[off + 1] = y;
-        circleInstanceData[off + 2] = 6; // radius
-        circleInstanceData[off + 3] = batch.rgb[0];
-        circleInstanceData[off + 4] = batch.rgb[1];
-        circleInstanceData[off + 5] = batch.rgb[2];
-        circleInstanceData[off + 6] = 1.0;
-        circleCount++;
+        ctx.fillStyle = `rgb(${batch.rgb[0]}, ${batch.rgb[1]}, ${batch.rgb[2]})`;
+        ctx.beginPath();
+        ctx.arc(x, y, 6, 0, Math.PI * 2);
+        ctx.fill();
     }
 
-    // Error bolletjes ook als circles tekenen (rood)
-    for (const [, err] of boxErrorsMap) {
-        if (circleCount >= MAX_CIRCLES) break;
-        const off = circleCount * 7;
-        circleInstanceData[off + 0] = err.x;
-        circleInstanceData[off + 1] = err.y;
-        circleInstanceData[off + 2] = 9; // iets groter
-        circleInstanceData[off + 3] = 0.94;
-        circleInstanceData[off + 4] = 0.17;
-        circleInstanceData[off + 5] = 0.17;
-        circleInstanceData[off + 6] = 1.0;
-        circleCount++;
-    }
-
-    gl.bindVertexArray(circleVAO);
-    gl.bindBuffer(gl.ARRAY_BUFFER, circleInstanceBuf);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, circleInstanceData.subarray(0, circleCount * 7));
-    gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, circleCount);
-
-    // --- Text overlay via 2D canvas texture ---
-    overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-
-    // Draw box labels on overlay using transform
-    overlayCtx.save();
-    overlayCtx.translate(panX, panY);
-    overlayCtx.scale(zoomLevel, zoomLevel);
-    overlayCtx.font = 'bold 11px monospace';
-    overlayCtx.textAlign = 'center';
-    overlayCtx.textBaseline = 'middle';
-    overlayCtx.fillStyle = 'white';
-    // Box borders
-    overlayCtx.strokeStyle = 'white';
-    overlayCtx.lineWidth = 2 / zoomLevel;
-    for (const box of boxes) {
-        if (!isBoxInView(box)) continue; // Skip off-screen boxes
-        overlayCtx.strokeRect(box.x, box.y, box.w, box.h);
-        overlayCtx.fillText(box.label, boxCenterX(box), boxCenterY(box));
-    }
-
-    // Highlight geselecteerde box
-    if (activePopupBox) {
-        const b = activePopupBox;
-        const pad = 4;
-        overlayCtx.save();
-        overlayCtx.strokeStyle = '#ffcc00';
-        overlayCtx.lineWidth = 3 / zoomLevel;
-        overlayCtx.shadowColor = '#ffcc00';
-        overlayCtx.shadowBlur = 12 / zoomLevel;
-        overlayCtx.strokeRect(b.x - pad, b.y - pad, b.w + pad * 2, b.h + pad * 2);
-        overlayCtx.restore();
-    }
-
-    // Highlight geselecteerde lijn op overlay
-    if (activePopupLine) {
-        overlayCtx.save();
-        overlayCtx.strokeStyle = '#ffcc00';
-        overlayCtx.lineWidth = 2.5 / zoomLevel;
-        overlayCtx.shadowColor = '#ffcc00';
-        overlayCtx.shadowBlur = 10 / zoomLevel;
-        overlayCtx.beginPath();
-        overlayCtx.moveTo(boxCenterX(activePopupLine.from), boxCenterY(activePopupLine.from));
-        overlayCtx.lineTo(boxCenterX(activePopupLine.to), boxCenterY(activePopupLine.to));
-        overlayCtx.stroke();
-        overlayCtx.restore();
-    }
-
-    // Highlight geselecteerde batch
+    // --- Highlight selected batch ---
     if (activePopupBatch) {
-        let bp: { x: number, y: number, batch: Batch | null } | undefined;
+        let bp: { x: number; y: number; batch: Batch | null } | undefined;
         for (let i = 0; i < lastBatchPosCount; i++) {
             if (batchPosPool[i].batch === activePopupBatch) { bp = batchPosPool[i]; break; }
         }
         if (bp) {
-            overlayCtx.save();
-            overlayCtx.strokeStyle = '#ffcc00';
-            overlayCtx.lineWidth = 2.5 / zoomLevel;
-            overlayCtx.shadowColor = '#ffcc00';
-            overlayCtx.shadowBlur = 14 / zoomLevel;
-            overlayCtx.beginPath();
-            overlayCtx.arc(bp.x, bp.y, 10 / zoomLevel, 0, Math.PI * 2);
-            overlayCtx.stroke();
-            overlayCtx.restore();
+            ctx.save();
+            ctx.strokeStyle = '#ffcc00';
+            ctx.lineWidth = 2.5 / zoomLevel;
+            ctx.shadowColor = '#ffcc00';
+            ctx.shadowBlur = 14 / zoomLevel;
+            ctx.beginPath();
+            ctx.arc(bp.x, bp.y, 10 / zoomLevel, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
         }
     }
 
-    overlayCtx.restore();
-
-    // Error count badges (in world space, boven de error cirkels)
-    overlayCtx.save();
-    overlayCtx.translate(panX, panY);
-    overlayCtx.scale(zoomLevel, zoomLevel);
-    overlayCtx.font = `bold ${Math.max(9, 11 / zoomLevel * 1)}px monospace`;
-    overlayCtx.textAlign = 'center';
-    overlayCtx.textBaseline = 'middle';
+    // --- Draw error circles ---
     for (const [, err] of boxErrorsMap) {
-        // Teken aantal op het error bolletje
-        overlayCtx.fillStyle = 'white';
-        overlayCtx.fillText(`${err.entries.length}`, err.x, err.y);
-    }
-    overlayCtx.restore();
+        // Red circle
+        ctx.fillStyle = '#f02b2b';
+        ctx.beginPath();
+        ctx.arc(err.x, err.y, 9, 0, Math.PI * 2);
+        ctx.fill();
 
-    // Highlight geselecteerde error
+        // Count badge
+        ctx.fillStyle = 'white';
+        ctx.font = `bold ${Math.max(9, 11)}px monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`${err.entries.length}`, err.x, err.y);
+    }
+
+    // --- Highlight selected error ---
     if (activePopupErrors) {
-        overlayCtx.save();
-        overlayCtx.translate(panX, panY);
-        overlayCtx.scale(zoomLevel, zoomLevel);
-        overlayCtx.strokeStyle = '#ffcc00';
-        overlayCtx.lineWidth = 3 / zoomLevel;
-        overlayCtx.shadowColor = '#ffcc00';
-        overlayCtx.shadowBlur = 12 / zoomLevel;
-        overlayCtx.beginPath();
-        overlayCtx.arc(activePopupErrors.x, activePopupErrors.y, 12, 0, Math.PI * 2);
-        overlayCtx.stroke();
-        overlayCtx.restore();
+        ctx.save();
+        ctx.strokeStyle = '#ffcc00';
+        ctx.lineWidth = 3 / zoomLevel;
+        ctx.shadowColor = '#ffcc00';
+        ctx.shadowBlur = 12 / zoomLevel;
+        ctx.beginPath();
+        ctx.arc(activePopupErrors.x, activePopupErrors.y, 12, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
     }
 
-    // HUD
-    overlayCtx.fillStyle = 'white';
-    overlayCtx.font = '16px monospace';
-    overlayCtx.textAlign = 'start';
-    overlayCtx.textBaseline = 'alphabetic';
-    overlayCtx.fillText(`FPS: ${fps}`, 10, 24);
-    overlayCtx.fillText(`Batches: ${batches.length} (visible: ${activeCount})`, 10, 46);
-    overlayCtx.fillText(`Zoom: ${Math.round(zoomLevel * 100)}%`, 10, 68);
-    overlayCtx.fillText(`Boxes: ${boxes.length}`, 10, 90);
+    ctx.restore(); // End world transform
+
+    // --- HUD (screen space) ---
+    ctx.fillStyle = 'white';
+    ctx.font = '16px monospace';
+    ctx.textAlign = 'start';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText(`FPS: ${fps}`, 10, 24);
+    ctx.fillText(`Batches: ${batches.length} (visible: ${activeCount})`, 10, 46);
+    ctx.fillText(`Zoom: ${Math.round(zoomLevel * 100)}%`, 10, 68);
+    ctx.fillText(`Boxes: ${boxes.length}`, 10, 90);
     let totalErrors = 0;
     for (const [, e] of boxErrorsMap) totalErrors += e.entries.length;
-    overlayCtx.fillText(`Errors: ${totalErrors}`, 10, 112);
+    ctx.fillText(`Errors: ${totalErrors}`, 10, 112);
     if (paused) {
-        overlayCtx.fillStyle = '#ef4444';
-        overlayCtx.font = 'bold 20px monospace';
-        overlayCtx.fillText('PAUSED', 10, 140);
+        ctx.fillStyle = '#ef4444';
+        ctx.font = 'bold 20px monospace';
+        ctx.fillText('PAUSED', 10, 140);
     }
-
-    // Upload overlay to texture and draw as blended fullscreen quad
-    gl.bindTexture(gl.TEXTURE_2D, overlayTexture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, overlayCanvas);
-
-    gl.useProgram(overlayProgram);
-    gl.uniform1i(u_overlay_texture, 0);
-    gl.bindVertexArray(overlayVAO);
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
-
-    gl.bindVertexArray(null);
-
-    updatePopupPosition();
 
     if (uncapFps) {
         setTimeout(animate, 0);

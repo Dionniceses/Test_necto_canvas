@@ -58,6 +58,15 @@
     #controls button:hover { background: #2563eb; }
     #controls button.paused { background: #ef4444; }
     #controls button.paused:hover { background: #dc2626; }
+    #controls select {
+      padding: 3px 6px;
+      border: 1px solid #555;
+      border-radius: 4px;
+      background: #222;
+      color: white;
+      font: 13px monospace;
+      cursor: pointer;
+    }
     #zoom-level { font-size: 12px; opacity: 0.7; }
     #renderer-tag {
       position: absolute;
