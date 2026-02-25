@@ -73,6 +73,7 @@ export type Selection =
 
 export interface HudStats {
   fps: number;
+  avgFps: number;
   totalBatches: number;
   visibleBatches: number;
   zoomPercent: number;

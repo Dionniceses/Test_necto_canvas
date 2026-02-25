@@ -131,6 +131,7 @@ export class WebGLComponent implements AfterViewInit, OnDestroy {
   readonly selection = signal<Selection>({ kind: 'none' });
   readonly hud = signal<HudStats>({
     fps: 0,
+    avgFps: 0,
     totalBatches: 0,
     visibleBatches: 0,
     zoomPercent: 100,
@@ -181,6 +182,7 @@ export class WebGLComponent implements AfterViewInit, OnDestroy {
 
   onApply(): void {
     this.engine?.setCounts({ batches: this.batchCount(), boxes: this.boxCount() });
+    this.engine?.resetAvgFps();
     this.selection.set({ kind: 'none' });
     this.paused.set(false);
   }

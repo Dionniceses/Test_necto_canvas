@@ -205,6 +205,8 @@ export class CanvasEngine implements EngineApi {
   private frameCount = 0;
   private lastFpsTime = 0;
   private fps = 0;
+  private fpsHistory: number[] = [];
+  private avgFps = 0;
   private errorIdCounter = 0;
 
   private pauseTimeOffset = 0;
@@ -315,6 +317,11 @@ export class CanvasEngine implements EngineApi {
     this.activePopupBatch = null;
     this.activePopupErrors = null;
     this.emitSelection({ kind: 'none' });
+  }
+
+  resetAvgFps(): void {
+    this.fpsHistory = [];
+    this.avgFps = 0;
   }
 
   dispose(): void {
@@ -495,6 +502,9 @@ export class CanvasEngine implements EngineApi {
       this.fps = this.frameCount;
       this.frameCount = 0;
       this.lastFpsTime = realNow;
+      this.fpsHistory.push(this.fps);
+      if (this.fpsHistory.length > 60) this.fpsHistory.shift();
+      this.avgFps = Math.round(this.fpsHistory.reduce((a, b) => a + b, 0) / this.fpsHistory.length);
     }
 
     gl.viewport(0, 0, canvas.width, canvas.height);
@@ -766,14 +776,15 @@ export class CanvasEngine implements EngineApi {
     overlayCtx.textAlign = 'start';
     overlayCtx.textBaseline = 'alphabetic';
     overlayCtx.fillText(`FPS: ${this.fps}`, 10, 24);
-    overlayCtx.fillText(`Batches: ${this.batches.length} (visible: ${activeCount})`, 10, 46);
-    overlayCtx.fillText(`Zoom: ${Math.round(this.zoomLevel * 100)}%`, 10, 68);
-    overlayCtx.fillText(`Boxes: ${this.boxes.length}`, 10, 90);
-    overlayCtx.fillText(`Errors: ${this.totalErrors()}`, 10, 112);
+    overlayCtx.fillText(`Avg FPS (1m): ${this.avgFps}`, 10, 46);
+    overlayCtx.fillText(`Batches: ${this.batches.length} (visible: ${activeCount})`, 10, 68);
+    overlayCtx.fillText(`Zoom: ${Math.round(this.zoomLevel * 100)}%`, 10, 90);
+    overlayCtx.fillText(`Boxes: ${this.boxes.length}`, 10, 112);
+    overlayCtx.fillText(`Errors: ${this.totalErrors()}`, 10, 134);
     if (this.paused) {
       overlayCtx.fillStyle = '#ef4444';
       overlayCtx.font = 'bold 20px monospace';
-      overlayCtx.fillText('PAUSED', 10, 140);
+      overlayCtx.fillText('PAUSED', 10, 162);
     }
 
     gl.bindTexture(gl.TEXTURE_2D, this.overlayTexture);
@@ -888,6 +899,7 @@ export class CanvasEngine implements EngineApi {
 
     const stats: HudStats = {
       fps: this.fps,
+      avgFps: this.avgFps,
       totalBatches: this.batches.length,
       visibleBatches,
       zoomPercent: Math.round(this.zoomLevel * 100),
@@ -1165,7 +1177,7 @@ export class CanvasEngine implements EngineApi {
     }
 
     for (let index = 0; index < this.boxes.length; index++) {
-      const numConnections = 1 + Math.floor(Math.random() * 0);
+      const numConnections = 2 + Math.floor(Math.random() * 3);
       const available = Array.from({ length: this.boxes.length }, (_, k) => k).filter((k) => k !== index);
       for (let c = 0; c < numConnections && available.length > 0; c++) {
         const pick = Math.floor(Math.random() * available.length);

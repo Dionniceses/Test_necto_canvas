@@ -130,6 +130,8 @@ export class PixiEngine implements EngineApi {
   private frameCount = 0;
   private lastFpsTime = 0;
   private fps = 0;
+  private fpsHistory: number[] = [];
+  private avgFps = 0;
   private errorIdCounter = 0;
 
   private pauseTimeOffset = 0;
@@ -249,6 +251,11 @@ export class PixiEngine implements EngineApi {
     this.emitSelection({ kind: 'none' });
   }
 
+  resetAvgFps(): void {
+    this.fpsHistory = [];
+    this.avgFps = 0;
+  }
+
   dispose(): void {
     this.stop();
     this.unbindInteractionHandlers();
@@ -326,6 +333,7 @@ export class PixiEngine implements EngineApi {
     this.overlayCanvas.style.left = '0';
     this.overlayCanvas.style.pointerEvents = 'none'; // clicks pass through to pixi canvas
     this.overlayCanvas.style.zIndex = '1';
+    this.overlayCanvas.style.background = 'transparent';
     wrapper.appendChild(this.overlayCanvas);
     this.overlayCtx = this.overlayCanvas.getContext('2d')!;
 
@@ -413,7 +421,7 @@ export class PixiEngine implements EngineApi {
     while (this.batchSpritePool.length < needed) {
       const s = new PIXI.Sprite(this.circleTexture);
       s.anchor.set(0.5, 0.5);
-      s.scale.set(scale);
+      s.scale.set(scale);  // static — ParticleContainer has scale:false
       s.visible = false;
       this.batchSpriteContainer.addChild(s);
       this.batchSpritePool.push(s);
@@ -458,6 +466,9 @@ export class PixiEngine implements EngineApi {
       this.fps = this.frameCount;
       this.frameCount = 0;
       this.lastFpsTime = realNow;
+      this.fpsHistory.push(this.fps);
+      if (this.fpsHistory.length > 60) this.fpsHistory.shift();
+      this.avgFps = Math.round(this.fpsHistory.reduce((a, b) => a + b, 0) / this.fpsHistory.length);
       this.overlayDirty = true; // FPS changed → repaint overlay
     }
 
@@ -607,14 +618,15 @@ export class PixiEngine implements EngineApi {
     ctx.font = '14px monospace';
     ctx.fillStyle = '#fff';
     ctx.fillText(`FPS: ${this.fps}`, 10, 20);
-    ctx.fillText(bStr, 10, 38);
-    ctx.fillText(zStr, 10, 56);
-    ctx.fillText(`Boxes: ${this.boxes.length}`, 10, 74);
-    ctx.fillText(`Errors: ${this.cachedTotalErrors}`, 10, 92);
+    ctx.fillText(`Avg FPS (1m): ${this.avgFps}`, 10, 38);
+    ctx.fillText(bStr, 10, 56);
+    ctx.fillText(zStr, 10, 74);
+    ctx.fillText(`Boxes: ${this.boxes.length}`, 10, 92);
+    ctx.fillText(`Errors: ${this.cachedTotalErrors}`, 10, 110);
     if (this.paused) {
       ctx.fillStyle = '#ef4444';
       ctx.font = 'bold 16px monospace';
-      ctx.fillText('PAUSED', 10, 114);
+      ctx.fillText('PAUSED', 10, 132);
     }
 
     // ── Box labels (world-space, transformed) ──
@@ -1081,6 +1093,7 @@ export class PixiEngine implements EngineApi {
     this.lastHudEmitTime = now;
     const stats: HudStats = {
       fps: this.fps,
+      avgFps: this.avgFps,
       totalBatches: this.batches.length,
       visibleBatches,
       zoomPercent: Math.round(this.zoomLevel * 100),

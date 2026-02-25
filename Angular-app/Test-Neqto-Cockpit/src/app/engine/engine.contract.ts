@@ -31,5 +31,6 @@ export interface EngineApi {
   setPaused(value: boolean): void;
   setCounts(counts: EngineCounts): void;
   clearSelection(): void;
+  resetAvgFps(): void;
   dispose(): void;
 }

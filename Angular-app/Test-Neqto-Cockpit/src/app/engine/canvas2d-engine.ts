@@ -75,6 +75,8 @@ export class Canvas2dEngine implements EngineApi {
   private frameCount = 0;
   private lastFpsTime = 0;
   private fps = 0;
+  private fpsHistory: number[] = [];
+  private avgFps = 0;
   private errorIdCounter = 0;
 
   private pauseTimeOffset = 0;
@@ -178,6 +180,11 @@ export class Canvas2dEngine implements EngineApi {
     this.activePopupBatch = null;
     this.activePopupErrors = null;
     this.emitSelection({ kind: 'none' });
+  }
+
+  resetAvgFps(): void {
+    this.fpsHistory = [];
+    this.avgFps = 0;
   }
 
   dispose(): void {
@@ -312,6 +319,9 @@ export class Canvas2dEngine implements EngineApi {
       this.fps = this.frameCount;
       this.frameCount = 0;
       this.lastFpsTime = realNow;
+      this.fpsHistory.push(this.fps);
+      if (this.fpsHistory.length > 60) this.fpsHistory.shift();
+      this.avgFps = Math.round(this.fpsHistory.reduce((a, b) => a + b, 0) / this.fpsHistory.length);
     }
 
     const W = canvas.width;
@@ -453,10 +463,11 @@ export class Canvas2dEngine implements EngineApi {
     ctx.textAlign = 'start';
     ctx.textBaseline = 'alphabetic';
     ctx.fillText(`FPS: ${this.fps}`, 10, 24);
-    ctx.fillText(`Batches: ${this.batches.length} (visible: ${activeCount})`, 10, 46);
-    ctx.fillText(`Zoom: ${Math.round(this.zoomLevel * 100)}%`, 10, 68);
-    ctx.fillText(`Boxes: ${this.boxes.length}`, 10, 90);
-    ctx.fillText(`Errors: ${this.totalErrors()}`, 10, 112);
+    ctx.fillText(`Avg FPS (1m): ${this.avgFps}`, 10, 42);
+    ctx.fillText(`Batches: ${this.batches.length} (visible: ${activeCount})`, 10, 60);
+    ctx.fillText(`Zoom: ${Math.round(this.zoomLevel * 100)}%`, 10, 78);
+    ctx.fillText(`Boxes: ${this.boxes.length}`, 10, 96);
+    ctx.fillText(`Errors: ${this.totalErrors()}`, 10, 114);
     if (this.paused) {
       ctx.fillStyle = '#ef4444';
       ctx.font = 'bold 20px monospace';
@@ -804,6 +815,7 @@ export class Canvas2dEngine implements EngineApi {
     this.lastHudEmitTime = now;
     const stats: HudStats = {
       fps: this.fps,
+      avgFps: this.avgFps,
       totalBatches: this.batches.length,
       visibleBatches,
       zoomPercent: Math.round(this.zoomLevel * 100),
