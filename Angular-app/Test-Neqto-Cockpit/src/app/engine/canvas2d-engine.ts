@@ -379,7 +379,7 @@ export class Canvas2dEngine implements EngineApi {
       const [r, g, b] = batch.rgb;
       ctx.fillStyle = `rgb(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)})`;
       ctx.beginPath();
-      ctx.arc(x, y, 6, 0, Math.PI * 2);
+      ctx.arc(x, y, batch.radius, 0, Math.PI * 2);
       ctx.fill();
     }
 
@@ -437,7 +437,7 @@ export class Canvas2dEngine implements EngineApi {
         ctx.shadowColor = '#ffcc00';
         ctx.shadowBlur = 14 / this.zoomLevel;
         ctx.beginPath();
-        ctx.arc(pos.x, pos.y, 10, 0, Math.PI * 2);
+        ctx.arc(pos.x, pos.y, (this.activePopupBatch?.radius ?? 6) + 4, 0, Math.PI * 2);
         ctx.stroke();
         ctx.restore();
       }
@@ -567,6 +567,7 @@ export class Canvas2dEngine implements EngineApi {
       startTime: now,
       duration: 1500 + Math.random() * 3500,
       rgb: from.rgb,
+      radius: 3 + Math.random() * 9,
       fromIdx,
       toIdx,
     };

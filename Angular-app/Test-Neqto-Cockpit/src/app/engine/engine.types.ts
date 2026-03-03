@@ -17,6 +17,7 @@ export interface Batch {
   startTime: number;
   duration: number;
   rgb: [number, number, number];
+  radius: number;
   fromIdx: number;
   toIdx: number;
 }

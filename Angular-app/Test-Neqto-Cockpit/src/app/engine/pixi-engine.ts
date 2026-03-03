@@ -502,6 +502,7 @@ export class PixiEngine implements EngineApi {
       const s = this.batchSpritePool[spriteIdx];
       s.x = x;
       s.y = y;
+      s.scale.set(batch.radius / 16);
       s.tint = batch.tint; // pre-computed, no per-frame math
       s.visible = true;
       spriteIdx++;
@@ -563,7 +564,7 @@ export class PixiEngine implements EngineApi {
       }
       if (bp) {
         this.highlightGraphics.clear();
-        this.highlightGraphics.circle(bp.x, bp.y, 10);
+        this.highlightGraphics.circle(bp.x, bp.y, (this.activePopupBatch?.radius ?? 6) + 4);
         this.highlightGraphics.stroke({ width: 2.5, color: 0xffcc00 });
       }
     }
@@ -797,6 +798,7 @@ export class PixiEngine implements EngineApi {
       startTime: now,
       duration: 1500 + Math.random() * 3500,
       rgb: from.rgb,
+      radius: 3 + Math.random() * 9,
       tint: rgbToTint(from.rgb), // pre-computed tint
       fromIdx,
       toIdx,

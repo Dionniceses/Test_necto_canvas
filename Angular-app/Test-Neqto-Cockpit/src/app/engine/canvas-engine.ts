@@ -644,7 +644,7 @@ export class CanvasEngine implements EngineApi {
       const offset = circleCount * 7;
       this.circleInstanceData[offset + 0] = x;
       this.circleInstanceData[offset + 1] = y;
-      this.circleInstanceData[offset + 2] = 6;
+      this.circleInstanceData[offset + 2] = batch.radius;
       this.circleInstanceData[offset + 3] = batch.rgb[0];
       this.circleInstanceData[offset + 4] = batch.rgb[1];
       this.circleInstanceData[offset + 5] = batch.rgb[2];
@@ -737,7 +737,7 @@ export class CanvasEngine implements EngineApi {
         overlayCtx.shadowColor = '#ffcc00';
         overlayCtx.shadowBlur = 14 / this.zoomLevel;
         overlayCtx.beginPath();
-        overlayCtx.arc(position.x, position.y, 10 / this.zoomLevel, 0, Math.PI * 2);
+        overlayCtx.arc(position.x, position.y, ((this.activePopupBatch?.radius ?? 6) + 4) / this.zoomLevel, 0, Math.PI * 2);
         overlayCtx.stroke();
         overlayCtx.restore();
       }
@@ -1270,6 +1270,7 @@ export class CanvasEngine implements EngineApi {
       startTime: now,
       duration: 1500 + Math.random() * 3500,
       rgb: from.rgb,
+      radius: 3 + Math.random() * 9,
       fromIdx,
       toIdx,
     };
