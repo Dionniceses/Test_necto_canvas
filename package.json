@@ -6,7 +6,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "lite-server",
     "build": "tsc",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "mock:sse": "node mock-sse-server.js"
   },
   "keywords": [],
   "author": "",

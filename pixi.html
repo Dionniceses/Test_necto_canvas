@@ -12,12 +12,21 @@
       <!-- PixiJS zal zelf een canvas aanmaken -->
       <span id="renderer-tag">PixiJS</span>
       <div id="controls">
-        <label>Batches: <input id="input-batches" type="number" value="50" min="0" step="1000"></label>
-        <label>Boxen: <input id="input-boxes" type="number" value="75" min="1" max="500" step="5"></label>
-        <button id="btn-apply">Toepassen</button>
         <button id="btn-pause">&#10074;&#10074; Pauze</button>
-        <label><input id="chk-uncap" type="checkbox"> Uncap FPS</label>
-        <label><input id="chk-lines" type="checkbox" checked> Lijnen</label>
+        <div id="timeline-panel">
+          <div id="timeline-top">
+            <span id="live-indicator" class="live">LIVE</span>
+            <button id="btn-live" type="button">Naar Live</button>
+          </div>
+          <div id="timeline-track" role="slider" aria-label="Timeline">
+            <div id="timeline-buffer"></div>
+            <div id="timeline-cursor"></div>
+          </div>
+          <div id="timeline-meta">
+            <span id="timeline-current">--:--:--</span>
+            <span id="timeline-loading" class="hidden">Laden...</span>
+          </div>
+        </div>
         <span id="zoom-level">Zoom: 100%</span>
       </div>
     </div>

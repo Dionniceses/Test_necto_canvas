@@ -235,6 +235,7 @@ function boxCenterY(b: Box) { return b.y + b.h / 2; }
 
 // === Batches ===
 interface Batch {
+    requestId?: string;
     startX: number;
     startY: number;
     endX: number;
@@ -245,6 +246,45 @@ interface Batch {
     colorNum: number;
     fromIdx: number;
     toIdx: number;
+    radius: number;
+}
+
+interface TrafficBaseEvent {
+    id: string;
+    ts: number;
+    destination: string;
+    flow: string;
+    flow_execution_id: string;
+    trigger_ua?: string;
+    trigger_ip?: string;
+}
+
+interface TrafficHintEvent {
+    id: string;
+    payload_size: number;
+    'ttfb-hint'?: number;
+}
+
+interface TrafficFinalEvent {
+    id: string;
+    ttfb: number;
+    response_size: number;
+    response_code: number;
+}
+
+interface StreamHintEvent {
+    server_ts: number;
+    utc_date: string;
+    available_range: { from: number; to: number };
+    format: string;
+}
+
+interface TimelineRecord {
+    id: string;
+    base?: TrafficBaseEvent;
+    hint?: TrafficHintEvent;
+    final?: TrafficFinalEvent;
+    receivedAt: number;
 }
 
 // === Errors ===
@@ -307,8 +347,30 @@ function addError(fromIdx: number, toIdx: number) {
     }
 }
 
-let batchCount = 50;
 let batches: Batch[] = [];
+
+const STREAM_URL = 'http://localhost:8787/api/traffic/stream';
+let streamMode = false;
+let streamConnected = false;
+let streamStatusText = 'Stream: random fallback';
+let streamHintInfo: StreamHintEvent | null = null;
+let streamReconnectTimer: number | null = null;
+
+const requestsById = new Map<string, Batch>();
+const streamFlows = new Set<string>();
+const streamDestinations = new Set<string>();
+let lastAutoBoxCount = 0;
+
+const timelineById = new Map<string, TimelineRecord>();
+const timelineOrder: TimelineRecord[] = [];
+const bufferedLiveIds: string[] = [];
+const replayQueue: TrafficBaseEvent[] = [];
+let timelineRangeStart = 0;
+let timelineRangeEnd = 0;
+let timelinePlayheadTs = 0;
+let isLivePinned = true;
+let timelineLoading = false;
+const MAX_TIMELINE_RECORDS = 1600;
 
 let connectionEdges: [number, number][] = [];
 
@@ -343,13 +405,16 @@ function randomBoxBatch(now: number): Batch {
         colorNum: from.colorNum,
         fromIdx,
         toIdx,
+        radius: 6,
     };
 }
 
 function initBatches() {
     batches = [];
+    requestsById.clear();
     const now = performance.now();
-    for (let i = 0; i < batchCount; i++) {
+    const target = fallbackBatchTarget();
+    for (let i = 0; i < target; i++) {
         const batch = randomBoxBatch(now);
         if (Math.random() < 0.7) {
             batch.startTime = now - Math.random() * 0.8 * batch.duration;
@@ -357,6 +422,342 @@ function initBatches() {
             batch.startTime = now + Math.random() * 3000;
         }
         batches.push(batch);
+    }
+}
+
+function hashString(input: string): number {
+    let h = 2166136261;
+    for (let i = 0; i < input.length; i++) {
+        h ^= input.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+}
+
+function clamp(value: number, min: number, max: number): number {
+    return Math.max(min, Math.min(max, value));
+}
+
+function radiusFromBytes(bytes: number): number {
+    // Small logarithmic scale so very large payloads stay visually manageable.
+    const scaled = Math.log2(Math.max(32, bytes)) - 4;
+    return clamp(4 + scaled, 4, 14);
+}
+
+function fallbackBatchTarget(): number {
+    return clamp(Math.floor(boxes.length * 1.4), 10, 220);
+}
+
+function autoBoxCountFromStream(): number {
+    // Weighted by stream cardinality: more unique flows/destinations yields richer topology.
+    const weighted = streamFlows.size * 5 + streamDestinations.size * 6;
+    return clamp(weighted, 8, 140);
+}
+
+function syncBoxesToStreamData(force = false) {
+    const nextCount = autoBoxCountFromStream();
+    const shouldRebuild = force || boxes.length === 0 || Math.abs(nextCount - boxes.length) >= 3;
+    if (!shouldRebuild) return;
+
+    generateBoxes(nextCount);
+    buildConnectionEdges();
+    boxErrorsMap = new Map();
+    batches = [];
+    requestsById.clear();
+    closePopup();
+    lastAutoBoxCount = nextCount;
+}
+
+function formatClock(ts: number): string {
+    if (!ts) return '--:--:--';
+    return new Date(ts).toLocaleTimeString();
+}
+
+function updateTimelineRange(ts: number) {
+    if (!Number.isFinite(ts) || ts <= 0) return;
+    if (timelineRangeStart === 0 || ts < timelineRangeStart) timelineRangeStart = ts;
+    if (timelineRangeEnd === 0 || ts > timelineRangeEnd) timelineRangeEnd = ts;
+    if (isLivePinned) {
+        timelinePlayheadTs = timelineRangeEnd;
+    }
+}
+
+function upsertTimelineRecord(id: string): TimelineRecord {
+    const existing = timelineById.get(id);
+    if (existing) {
+        existing.receivedAt = performance.now();
+        return existing;
+    }
+    const created: TimelineRecord = { id, receivedAt: performance.now() };
+    timelineById.set(id, created);
+    timelineOrder.push(created);
+
+    if (timelineOrder.length > MAX_TIMELINE_RECORDS) {
+        const drop = timelineOrder.shift();
+        if (drop) {
+            timelineById.delete(drop.id);
+            const idx = bufferedLiveIds.indexOf(drop.id);
+            if (idx >= 0) bufferedLiveIds.splice(idx, 1);
+        }
+    }
+    return created;
+}
+
+function enqueueReplayAt(targetTs: number) {
+    replayQueue.length = 0;
+    const start = targetTs - 20_000;
+    const end = targetTs + 45_000;
+    const items = timelineOrder
+        .filter((r) => !!r.base && r.base!.ts >= start && r.base!.ts <= end)
+        .sort((a, b) => (a.base!.ts - b.base!.ts));
+    for (const item of items) {
+        replayQueue.push(item.base!);
+    }
+}
+
+function setTimelineLoading(next: boolean) {
+    timelineLoading = next;
+    if (timelineLoadingEl) {
+        timelineLoadingEl.classList.toggle('hidden', !next);
+    }
+}
+
+function applyTimelineSelection(targetTs: number) {
+    if (!timelineRangeStart || !timelineRangeEnd) return;
+    isLivePinned = false;
+    timelinePlayheadTs = clamp(targetTs, timelineRangeStart, timelineRangeEnd);
+    setTimelineLoading(true);
+
+    batches = [];
+    requestsById.clear();
+    replayQueue.length = 0;
+
+    window.setTimeout(() => {
+        enqueueReplayAt(timelinePlayheadTs);
+        setTimelineLoading(false);
+    }, 650);
+}
+
+function pinToLive() {
+    replayQueue.length = 0;
+    setTimelineLoading(false);
+    isLivePinned = true;
+    timelinePlayheadTs = timelineRangeEnd;
+    setPausedState(false);
+
+    // Build an immediate on-screen burst from buffered + latest known base events.
+    const bufferedRecentIds = bufferedLiveIds.slice(-90);
+    bufferedLiveIds.length = 0;
+    const immediateEvents: TrafficBaseEvent[] = [];
+
+    for (const id of bufferedRecentIds) {
+        const rec = timelineById.get(id);
+        if (rec?.base) immediateEvents.push(rec.base);
+    }
+
+    if (immediateEvents.length < 30) {
+        const latestKnown = timelineOrder.filter((r) => !!r.base).slice(-80);
+        for (const item of latestKnown) {
+            if (item.base) immediateEvents.push(item.base);
+        }
+    }
+
+    const dedup = new Map<string, TrafficBaseEvent>();
+    for (const ev of immediateEvents) dedup.set(ev.id, ev);
+    const burst = Array.from(dedup.values())
+        .sort((a, b) => a.ts - b.ts)
+        .slice(-45);
+
+    batches = [];
+    requestsById.clear();
+    for (const ev of burst) {
+        renderBaseEvent(ev);
+    }
+}
+
+function edgeForRequest(base: TrafficBaseEvent): [number, number] {
+    if (connectionEdges.length === 0) return [0, 0];
+    const key = `${base.id}-${base.flow}-${base.destination}`;
+    const idx = hashString(key) % connectionEdges.length;
+    return connectionEdges[idx];
+}
+
+function renderBaseEvent(base: TrafficBaseEvent) {
+    if (boxes.length === 0 || connectionEdges.length === 0) return;
+
+    const [fromIdx, toIdx] = edgeForRequest(base);
+    const from = boxes[fromIdx];
+    const to = boxes[toIdx];
+    const batch: Batch = {
+        requestId: base.id,
+        startX: boxCenterX(from),
+        startY: boxCenterY(from),
+        endX: boxCenterX(to),
+        endY: boxCenterY(to),
+        startTime: performance.now(),
+        duration: 900,
+        rgb: from.rgb,
+        colorNum: from.colorNum,
+        fromIdx,
+        toIdx,
+        radius: 6,
+    };
+
+    const rec = timelineById.get(base.id);
+    if (rec?.hint) {
+        batch.radius = radiusFromBytes(rec.hint.payload_size);
+        if (typeof rec.hint['ttfb-hint'] === 'number') {
+            batch.duration = clamp(rec.hint['ttfb-hint'] * 3, 300, 2400);
+        }
+    }
+    if (rec?.final) {
+        batch.duration = clamp(rec.final.ttfb * 3, 250, 4000);
+        batch.radius = radiusFromBytes(rec.final.response_size);
+    }
+
+    batches.push(batch);
+    requestsById.set(base.id, batch);
+}
+
+function isTrafficBaseEvent(v: any): v is TrafficBaseEvent {
+    return v && typeof v.id === 'string' && typeof v.ts === 'number' && typeof v.destination === 'string' && typeof v.flow === 'string';
+}
+
+function isTrafficHintEvent(v: any): v is TrafficHintEvent {
+    return v && typeof v.id === 'string' && typeof v.payload_size === 'number';
+}
+
+function isTrafficFinalEvent(v: any): v is TrafficFinalEvent {
+    return v && typeof v.id === 'string' && typeof v.ttfb === 'number' && typeof v.response_code === 'number';
+}
+
+function isStreamHintEvent(v: any): v is StreamHintEvent {
+    return v && typeof v.server_ts === 'number' && typeof v.utc_date === 'string' && v.available_range;
+}
+
+function handleTrafficBaseEvent(base: TrafficBaseEvent) {
+    const rec = upsertTimelineRecord(base.id);
+    rec.base = base;
+    updateTimelineRange(base.ts);
+
+    const newFlow = !streamFlows.has(base.flow);
+    const newDestination = !streamDestinations.has(base.destination);
+    if (newFlow) streamFlows.add(base.flow);
+    if (newDestination) streamDestinations.add(base.destination);
+    if (isLivePinned && (newFlow || newDestination || boxes.length === 0 || connectionEdges.length === 0)) {
+        syncBoxesToStreamData();
+    }
+
+    if (paused || !isLivePinned || timelineLoading) {
+        bufferedLiveIds.push(base.id);
+        if (bufferedLiveIds.length > MAX_TIMELINE_RECORDS) {
+            bufferedLiveIds.splice(0, bufferedLiveIds.length - MAX_TIMELINE_RECORDS);
+        }
+        return;
+    }
+
+    renderBaseEvent(base);
+}
+
+function handleTrafficHintEvent(hint: TrafficHintEvent) {
+    const rec = upsertTimelineRecord(hint.id);
+    rec.hint = hint;
+
+    const batch = requestsById.get(hint.id);
+    if (!batch) return;
+
+    batch.radius = radiusFromBytes(hint.payload_size);
+    if (typeof hint['ttfb-hint'] === 'number') {
+        batch.duration = clamp(hint['ttfb-hint'] * 3, 300, 2400);
+    }
+}
+
+function handleTrafficFinalEvent(finalEvent: TrafficFinalEvent) {
+    const rec = upsertTimelineRecord(finalEvent.id);
+    rec.final = finalEvent;
+
+    const batch = requestsById.get(finalEvent.id);
+    if (!batch) return;
+
+    batch.duration = clamp(finalEvent.ttfb * 3, 250, 4000);
+    batch.radius = radiusFromBytes(finalEvent.response_size);
+
+    if (finalEvent.response_code >= 400) {
+        addError(batch.fromIdx, batch.toIdx);
+    }
+}
+
+function openTrafficStream() {
+    try {
+        const source = new EventSource(STREAM_URL);
+        streamMode = true;
+        streamStatusText = 'Stream: connecting';
+
+        source.addEventListener('open', () => {
+            streamConnected = true;
+            streamStatusText = 'Stream: connected';
+            streamFlows.clear();
+            streamDestinations.clear();
+            timelineById.clear();
+            timelineOrder.length = 0;
+            bufferedLiveIds.length = 0;
+            replayQueue.length = 0;
+            timelineRangeStart = 0;
+            timelineRangeEnd = 0;
+            timelinePlayheadTs = 0;
+            isLivePinned = true;
+            batches = [];
+            requestsById.clear();
+            syncBoxesToStreamData(true);
+            setTimelineLoading(false);
+        });
+
+        source.addEventListener('hint', (ev: MessageEvent) => {
+            try {
+                const parsed = JSON.parse(ev.data);
+                if (isStreamHintEvent(parsed)) {
+                    streamHintInfo = parsed;
+                    if (timelineRangeStart === 0) {
+                        timelineRangeStart = parsed.available_range.from;
+                    }
+                    timelineRangeEnd = Math.max(timelineRangeEnd, parsed.available_range.to);
+                    if (isLivePinned) timelinePlayheadTs = timelineRangeEnd;
+                }
+            } catch {
+                // Keep rendering, ignore malformed hint payloads.
+            }
+        });
+
+        source.addEventListener('ndjson', (ev: MessageEvent) => {
+            try {
+                const parsed = JSON.parse(ev.data);
+                if (isTrafficBaseEvent(parsed)) {
+                    handleTrafficBaseEvent(parsed);
+                    return;
+                }
+                if (isTrafficHintEvent(parsed)) {
+                    handleTrafficHintEvent(parsed);
+                    return;
+                }
+                if (isTrafficFinalEvent(parsed)) {
+                    handleTrafficFinalEvent(parsed);
+                }
+            } catch {
+                // Keep rendering, ignore malformed event payloads.
+            }
+        });
+
+        source.addEventListener('error', () => {
+            streamConnected = false;
+            streamStatusText = 'Stream: disconnected (retrying)';
+            source.close();
+            if (streamReconnectTimer !== null) window.clearTimeout(streamReconnectTimer);
+            streamReconnectTimer = window.setTimeout(() => openTrafficStream(), 1500);
+        });
+    } catch {
+        streamMode = false;
+        streamConnected = false;
+        streamStatusText = 'Stream: random fallback';
     }
 }
 
@@ -430,58 +831,33 @@ function ensureErrorSpritePool(needed: number) {
 }
 ensureErrorSpritePool(20);
 
-generateBoxes(75);
+generateBoxes(8);
 buildConnectionEdges();
 initBatches();
+openTrafficStream();
 
 // === UI Controls ===
-const inputBatches = document.getElementById('input-batches') as HTMLInputElement;
-const inputBoxes = document.getElementById('input-boxes') as HTMLInputElement;
-const btnApply = document.getElementById('btn-apply')!;
+const timelineTrackEl = document.getElementById('timeline-track') as HTMLElement | null;
+const timelineBufferEl = document.getElementById('timeline-buffer') as HTMLElement | null;
+const timelineCursorEl = document.getElementById('timeline-cursor') as HTMLElement | null;
+const timelineCurrentEl = document.getElementById('timeline-current') as HTMLElement | null;
+const timelineLoadingEl = document.getElementById('timeline-loading') as HTMLElement | null;
+const liveIndicatorEl = document.getElementById('live-indicator') as HTMLElement | null;
+const btnLive = document.getElementById('btn-live') as HTMLButtonElement | null;
 
-btnApply.addEventListener('click', () => {
-    const newBatchCount = Math.max(0, parseInt(inputBatches.value) || 0);
-    const newBoxCount = Math.max(1, parseInt(inputBoxes.value) || 1);
-    batchCount = newBatchCount;
-    generateBoxes(newBoxCount);
-    buildConnectionEdges();
-    boxErrorsMap = new Map();
-    initBatches();
-    closePopup();
-});
-
-// === Uncap FPS ===
-let uncapFps = false;
-const chkUncap = document.getElementById('chk-uncap') as HTMLInputElement | null;
-if (chkUncap) {
-    chkUncap.addEventListener('change', () => {
-        uncapFps = chkUncap.checked;
-        if (uncapFps) {
-            // Stop PixiJS ticker (uses rAF = vsync locked) and run our own setTimeout(0) loop
-            app.ticker.stop();
-            scheduleUncappedFrame();
-        } else {
-            // Go back to PixiJS ticker (rAF, ~60fps)
-            app.ticker.start();
-        }
+if (timelineTrackEl) {
+    timelineTrackEl.addEventListener('click', (ev: MouseEvent) => {
+        if (!timelineRangeStart || !timelineRangeEnd || timelineRangeEnd <= timelineRangeStart) return;
+        const rect = timelineTrackEl.getBoundingClientRect();
+        const ratio = clamp((ev.clientX - rect.left) / rect.width, 0, 1);
+        const targetTs = timelineRangeStart + (timelineRangeEnd - timelineRangeStart) * ratio;
+        applyTimelineSelection(targetTs);
     });
 }
 
-let uncappedFrameId: any = null;
-function scheduleUncappedFrame() {
-    if (!uncapFps) return;
-    uncappedFrameId = setTimeout(() => {
-        tickFrame();
-        app.renderer.render(app.stage);
-        scheduleUncappedFrame();
-    }, 0);
-}
-
-// === Toggle lijnen ===
-const chkLines = document.getElementById('chk-lines') as HTMLInputElement | null;
-if (chkLines) {
-    chkLines.addEventListener('change', () => {
-        linesGraphics.visible = chkLines.checked;
+if (btnLive) {
+    btnLive.addEventListener('click', () => {
+        pinToLive();
     });
 }
 
@@ -491,17 +867,31 @@ let pauseTimeOffset = 0;
 let pauseStartTime = 0;
 
 const btnPause = document.getElementById('btn-pause')!;
-btnPause.addEventListener('click', () => {
-    paused = !paused;
+
+function setPausedState(nextPaused: boolean) {
+    if (nextPaused === paused) return;
+    paused = nextPaused;
+
     if (paused) {
+        if (isLivePinned) {
+            // Like a live stream player: pausing drops you behind live while new data keeps buffering.
+            isLivePinned = false;
+            timelinePlayheadTs = timelineRangeEnd;
+        }
         pauseStartTime = performance.now();
         btnPause.innerHTML = '&#9654; Hervat';
         btnPause.classList.add('paused');
-    } else {
-        pauseTimeOffset += performance.now() - pauseStartTime;
-        btnPause.innerHTML = '&#10074;&#10074; Pauze';
-        btnPause.classList.remove('paused');
+        return;
     }
+
+    pauseTimeOffset += performance.now() - pauseStartTime;
+    setTimelineLoading(false);
+    btnPause.innerHTML = '&#10074;&#10074; Pauze';
+    btnPause.classList.remove('paused');
+}
+
+btnPause.addEventListener('click', () => {
+    setPausedState(!paused);
 });
 
 // === Zoom & Pan ===
@@ -882,34 +1272,34 @@ const fpsText = new PIXI.BitmapText({ text: 'FPS: 0', style: hudStyle });
 fpsText.x = 10; fpsText.y = 8;
 hudContainer.addChild(fpsText);
 
-const batchText = new PIXI.BitmapText({ text: 'Batches: 0', style: hudStyle });
-batchText.x = 10; batchText.y = 30;
-hudContainer.addChild(batchText);
-
 const zoomText = new PIXI.BitmapText({ text: 'Zoom: 100%', style: hudStyle });
-zoomText.x = 10; zoomText.y = 52;
+zoomText.x = 10; zoomText.y = 30;
 hudContainer.addChild(zoomText);
 
 const boxCountText = new PIXI.BitmapText({ text: 'Boxes: 0', style: hudStyle });
-boxCountText.x = 10; boxCountText.y = 74;
+boxCountText.x = 10; boxCountText.y = 52;
 hudContainer.addChild(boxCountText);
 
 const errorCountText = new PIXI.BitmapText({ text: 'Errors: 0', style: hudStyle });
-errorCountText.x = 10; errorCountText.y = 96;
+errorCountText.x = 10; errorCountText.y = 74;
 hudContainer.addChild(errorCountText);
 
 const pauseText = new PIXI.BitmapText({ text: 'PAUSED', style: { fontFamily: 'monospace', fontSize: 20, fill: 0xef4444 } });
-pauseText.x = 10; pauseText.y = 122;
+pauseText.x = 10; pauseText.y = 100;
 pauseText.visible = false;
 hudContainer.addChild(pauseText);
 
+const streamText = new PIXI.BitmapText({ text: 'Stream: random fallback', style: { fontFamily: 'monospace', fontSize: 13, fill: 0x9ae6b4 } });
+streamText.x = 10; streamText.y = 126;
+hudContainer.addChild(streamText);
+
 // Cached HUD values — only update Text when value changes
 let lastHudFps = -1;
-let lastHudBatchStr = '';
 let lastHudZoomStr = '';
 let lastHudBoxCount = -1;
 let lastHudErrors = -1;
 let lastHudPaused = false;
+let lastHudStream = '';
 
 // === Animate ===
 function tickFrame() {
@@ -929,6 +1319,9 @@ function tickFrame() {
             const b = batches[i];
             const progress = (now - b.startTime) / b.duration;
             if (progress >= 1) {
+                if (b.requestId) {
+                    requestsById.delete(b.requestId);
+                }
                 if (Math.random() < ERROR_CHANCE) {
                     addError(b.fromIdx, b.toIdx);
                 }
@@ -938,21 +1331,49 @@ function tickFrame() {
         }
         batches.length = writeIdx;
 
-        const deficit = batchCount - batches.length;
-        const spawnCount = deficit > 0
-            ? Math.max(1, Math.floor(deficit * 0.1))
-            : (Math.random() < 0.02 ? 1 : 0);
-        for (let i = 0; i < spawnCount; i++) {
-            const batch = randomBoxBatch(now);
-            batch.startTime = now + Math.random() * 500;
-            batches.push(batch);
+        if (!streamMode || !streamConnected) {
+            const deficit = fallbackBatchTarget() - batches.length;
+            const spawnCount = deficit > 0
+                ? Math.max(1, Math.floor(deficit * 0.1))
+                : (Math.random() < 0.02 ? 1 : 0);
+            for (let i = 0; i < spawnCount; i++) {
+                const batch = randomBoxBatch(now);
+                batch.startTime = now + Math.random() * 500;
+                batches.push(batch);
+            }
+        }
+
+        if (!timelineLoading && !isLivePinned) {
+            const replayBurst = Math.min(8, replayQueue.length);
+            for (let i = 0; i < replayBurst; i++) {
+                const base = replayQueue.shift();
+                if (!base) break;
+                renderBaseEvent(base);
+                timelinePlayheadTs = base.ts;
+            }
+
+            if (replayQueue.length === 0) {
+                const backlogBurst = Math.min(10, bufferedLiveIds.length);
+                for (let i = 0; i < backlogBurst; i++) {
+                    const nextId = bufferedLiveIds.shift();
+                    if (!nextId) break;
+                    const rec = timelineById.get(nextId);
+                    if (!rec?.base) continue;
+                    renderBaseEvent(rec.base);
+                    timelinePlayheadTs = rec.base.ts;
+                }
+
+                if (bufferedLiveIds.length === 0) {
+                    isLivePinned = true;
+                    timelinePlayheadTs = timelineRangeEnd;
+                }
+            }
         }
     }
 
     // ============================================================
     // BATCH CIRCLES — Sprite pool (geen Graphics.clear() meer!)
     // ============================================================
-    let activeCount = 0;
     lastBatchPosCount = 0;
 
     // Ensure pool is big enough
@@ -964,7 +1385,6 @@ function tickFrame() {
         const progress = (now - batch.startTime) / batch.duration;
         if (progress < 0 || progress >= 1) continue;
 
-        activeCount++;
         const p = Math.min(progress, 1);
         const x = batch.startX + (batch.endX - batch.startX) * p;
         const y = batch.startY + (batch.endY - batch.startY) * p;
@@ -979,6 +1399,7 @@ function tickFrame() {
         s.x = x;
         s.y = y;
         s.tint = batch.colorNum;
+        s.scale.set((batch.radius || BATCH_SPRITE_RADIUS) / 16);
         s.visible = true;
         spriteIdx++;
     }
@@ -1066,12 +1487,6 @@ function tickFrame() {
         lastHudFps = fps;
     }
 
-    const batchStr = `Batches: ${batches.length} (visible: ${activeCount})`;
-    if (batchStr !== lastHudBatchStr) {
-        batchText.text = batchStr;
-        lastHudBatchStr = batchStr;
-    }
-
     const zoomStr = `Zoom: ${Math.round(zoomLevel * 100)}%`;
     if (zoomStr !== lastHudZoomStr) {
         zoomText.text = zoomStr;
@@ -1093,6 +1508,33 @@ function tickFrame() {
     if (paused !== lastHudPaused) {
         pauseText.visible = paused;
         lastHudPaused = paused;
+    }
+
+    const streamInfo = streamHintInfo
+        ? `${streamStatusText} (${streamHintInfo.utc_date})`
+        : streamStatusText;
+    if (streamInfo !== lastHudStream) {
+        streamText.text = streamInfo;
+        lastHudStream = streamInfo;
+    }
+
+    const hasRange = timelineRangeStart > 0 && timelineRangeEnd > timelineRangeStart;
+    const playhead = isLivePinned ? timelineRangeEnd : timelinePlayheadTs;
+    if (timelineCurrentEl) {
+        timelineCurrentEl.textContent = formatClock(playhead);
+    }
+    if (timelineCursorEl) {
+        const ratio = hasRange ? clamp((playhead - timelineRangeStart) / (timelineRangeEnd - timelineRangeStart), 0, 1) : 0;
+        timelineCursorEl.style.left = `${(ratio * 100).toFixed(2)}%`;
+    }
+    if (timelineBufferEl) {
+        const bufferRatio = hasRange ? 1 : 0;
+        timelineBufferEl.style.width = `${(bufferRatio * 100).toFixed(2)}%`;
+    }
+    if (liveIndicatorEl) {
+        const liveState = isLivePinned && streamConnected && !timelineLoading;
+        liveIndicatorEl.classList.toggle('live', liveState);
+        liveIndicatorEl.textContent = liveState ? 'LIVE' : 'BUFFER';
     }
 }
 
