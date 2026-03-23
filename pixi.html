@@ -13,19 +13,16 @@
       <span id="renderer-tag">PixiJS</span>
       <div id="controls">
         <button id="btn-pause">&#10074;&#10074; Pauze</button>
+        <button id="btn-live">Naar Live</button>
+        <span id="live-state" class="state-badge disconnected">DISCONNECTED</span>
         <div id="timeline-panel">
-          <div id="timeline-top">
-            <span id="live-indicator" class="live">LIVE</span>
-            <button id="btn-live" type="button">Naar Live</button>
-          </div>
-          <div id="timeline-track" role="slider" aria-label="Timeline">
-            <div id="timeline-buffer"></div>
-            <div id="timeline-cursor"></div>
-          </div>
-          <div id="timeline-meta">
+          <input id="timeline-slider" type="range" min="0" max="1000" value="1000" step="1" />
+          <div id="timeline-times">
+            <span id="timeline-start">--:--:--</span>
             <span id="timeline-current">--:--:--</span>
-            <span id="timeline-loading" class="hidden">Laden...</span>
+            <span id="timeline-end">--:--:--</span>
           </div>
+          <span id="timeline-loading" class="timeline-loading hidden">LOADING SNAPSHOT...</span>
         </div>
         <span id="zoom-level">Zoom: 100%</span>
       </div>

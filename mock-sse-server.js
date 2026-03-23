@@ -1,11 +1,12 @@
+const fs = require('fs');
+const path = require('path');
 const http = require('http');
 const { URL } = require('url');
 
 const PORT = Number(process.env.MOCK_SSE_PORT || 8787);
-const LIVE_INTERVAL_MS = Number(process.env.MOCK_SSE_LIVE_INTERVAL_MS || 160);
-const LIVE_BURST = Number(process.env.MOCK_SSE_LIVE_BURST || 3);
-const HISTORICAL_COUNT = Number(process.env.MOCK_SSE_HISTORICAL_COUNT || 180);
-const HISTORICAL_INTERVAL_MS = Number(process.env.MOCK_SSE_HISTORICAL_INTERVAL_MS || 22);
+const DATA_DIR = path.join(__dirname, 'mock-data');
+const DATA_FILE = path.join(DATA_DIR, 'traffic-history.ndjson');
+const MAX_IN_MEMORY_EVENTS = 25000;
 
 const STATUS_CODES = [200, 201, 202, 204, 400, 401, 403, 404, 429, 500, 502, 503];
 const DESTINATIONS = [
@@ -21,6 +22,10 @@ const FLOWS = ['sync-flow', 'status-flow', 'retry-flow', 'report-flow', 'my-flow
 const USER_AGENTS = ['Postman/1.0', 'Chrome/125.0', 'Neqto-Agent/0.9', 'curl/8.4.0'];
 
 let sequence = 0;
+let eventStore = [];
+const subscribers = new Set();
+let liveProducerTimer = null;
+let shutdownHandled = false;
 
 function nowMs() {
   return Date.now();
@@ -67,19 +72,152 @@ function makeRequestStages(ts) {
   return { base, hint, final };
 }
 
+function isBaseEvent(event) {
+  return event && typeof event.id === 'string' && typeof event.ts === 'number';
+}
+
+function ensureDataFileExists() {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+
+  if (!fs.existsSync(DATA_FILE)) {
+    const seed = [];
+    const current = nowMs();
+    for (let i = 120; i > 0; i -= 1) {
+      const ts = current - i * 20 * 1000;
+      const ev = makeRequestStages(ts);
+      seed.push(ev.base, ev.hint, ev.final);
+    }
+    fs.writeFileSync(DATA_FILE, seed.map((item) => JSON.stringify(item)).join('\n') + '\n', 'utf8');
+  }
+}
+
+function loadEventsFromFile() {
+  const content = fs.readFileSync(DATA_FILE, 'utf8');
+  eventStore = content
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0)
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    })
+    .filter((line) => line !== null);
+
+  if (eventStore.length > MAX_IN_MEMORY_EVENTS) {
+    eventStore = eventStore.slice(-MAX_IN_MEMORY_EVENTS);
+  }
+}
+
+function readAllEventsFromFile() {
+  const content = fs.readFileSync(DATA_FILE, 'utf8');
+  return content
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0)
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    })
+    .filter((line) => line !== null);
+}
+
+function appendEventToStore(event) {
+  eventStore.push(event);
+  if (eventStore.length > MAX_IN_MEMORY_EVENTS) {
+    eventStore = eventStore.slice(-MAX_IN_MEMORY_EVENTS);
+  }
+
+  fs.appendFileSync(DATA_FILE, `${JSON.stringify(event)}\n`, 'utf8');
+}
+
+function broadcastNdjson(event) {
+  for (const res of subscribers) {
+    writeSse(res, event, 'ndjson');
+  }
+}
+
+function publishLiveEvent(event) {
+  appendEventToStore(event);
+  broadcastNdjson(event);
+}
+
+function startLiveProducer() {
+  liveProducerTimer = setInterval(() => {
+    // Emit two lightweight request pipelines per tick for denser live traffic.
+    const first = makeRequestStages(nowMs());
+    publishLiveEvent(first.base);
+    setTimeout(() => publishLiveEvent(first.hint), randomInt(30, 90));
+    setTimeout(() => publishLiveEvent(first.final), randomInt(110, 260));
+
+    const second = makeRequestStages(nowMs() + randomInt(1, 7));
+    setTimeout(() => publishLiveEvent(second.base), randomInt(20, 70));
+    setTimeout(() => publishLiveEvent(second.hint), randomInt(70, 140));
+    setTimeout(() => publishLiveEvent(second.final), randomInt(170, 320));
+  }, 360);
+}
+
+function clearHistoryFile() {
+  try {
+    fs.writeFileSync(DATA_FILE, '', 'utf8');
+    eventStore = [];
+    console.log('[mock-sse] history cleared on shutdown');
+  } catch (err) {
+    console.error('[mock-sse] failed to clear history on shutdown', err);
+  }
+}
+
+function handleShutdown(signal) {
+  if (shutdownHandled) return;
+  shutdownHandled = true;
+
+  console.log(`[mock-sse] shutting down (${signal})`);
+
+  if (liveProducerTimer) {
+    clearInterval(liveProducerTimer);
+  }
+
+  clearHistoryFile();
+
+  for (const res of subscribers) {
+    try {
+      res.end();
+    } catch {
+      // Ignore errors while tearing down sockets.
+    }
+  }
+
+  server.close(() => {
+    process.exit(0);
+  });
+
+  setTimeout(() => process.exit(0), 1000);
+}
+
+function buildIdTimestampMap(records) {
+  const idTs = new Map();
+  for (const item of records) {
+    if (isBaseEvent(item)) {
+      idTs.set(item.id, item.ts);
+    }
+  }
+  return idTs;
+}
+
+function timestampForRecord(record, idTs) {
+  if (typeof record.ts === 'number') return record.ts;
+  if (typeof record.id === 'string' && idTs.has(record.id)) return idTs.get(record.id);
+  return null;
+}
+
 function writeSse(res, payload, eventName = 'message') {
   res.write(`event: ${eventName}\n`);
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
-}
-
-function buildHistorical(count) {
-  const current = nowMs();
-  const arr = [];
-  for (let i = 0; i < count; i++) {
-    const ts = current - i * randomInt(900, 3500);
-    arr.push(makeRequestStages(ts));
-  }
-  return arr;
 }
 
 function parseTs(value, fallback) {
@@ -100,10 +238,17 @@ function handleSnapshot(req, res, url) {
   const to = parseTs(url.searchParams.get('to'), nowMs());
   const from = parseTs(url.searchParams.get('from'), to - 5 * 60 * 1000);
 
+  // Snapshot reads from full NDJSON history file, not only in-memory cache.
+  const allEvents = readAllEventsFromFile();
+  const idTs = buildIdTimestampMap(allEvents);
   const records = [];
-  for (let ts = to; ts >= from; ts -= randomInt(800, 1800)) {
-    const event = makeRequestStages(ts);
-    records.push(event.base, event.hint, event.final);
+  for (let i = allEvents.length - 1; i >= 0; i -= 1) {
+    const item = allEvents[i];
+    const itemTs = timestampForRecord(item, idTs);
+    if (itemTs === null) continue;
+    if (itemTs >= from && itemTs <= to) {
+      records.push(item);
+    }
   }
 
   res.writeHead(200, {
@@ -139,7 +284,16 @@ function handleSse(req, res) {
   };
   writeSse(res, hint, 'hint');
 
-  const historical = buildHistorical(HISTORICAL_COUNT);
+  const idTs = buildIdTimestampMap(eventStore);
+  const historical = [];
+  for (let i = eventStore.length - 1; i >= 0 && historical.length < 400; i -= 1) {
+    const item = eventStore[i];
+    const itemTs = timestampForRecord(item, idTs);
+    if (itemTs === null) continue;
+    if (itemTs >= dayStart.getTime()) {
+      historical.push(item);
+    }
+  }
   let historicalIndex = 0;
 
   const heartBeat = setInterval(() => {
@@ -153,26 +307,21 @@ function handleSse(req, res) {
     }
 
     const item = historical[historicalIndex++];
-    writeSse(res, item.base, 'ndjson');
-    setTimeout(() => writeSse(res, item.hint, 'ndjson'), 15);
-    setTimeout(() => writeSse(res, item.final, 'ndjson'), 30);
-  }, HISTORICAL_INTERVAL_MS);
+    writeSse(res, item, 'ndjson');
+  }, 35);
 
-  const livePump = setInterval(() => {
-    for (let i = 0; i < LIVE_BURST; i++) {
-      const live = makeRequestStages(nowMs() + i * 4);
-      const jitter = i * 8;
-      writeSse(res, live.base, 'ndjson');
-      setTimeout(() => writeSse(res, live.hint, 'ndjson'), randomInt(22, 80) + jitter);
-      setTimeout(() => writeSse(res, live.final, 'ndjson'), randomInt(90, 220) + jitter);
-    }
-  }, LIVE_INTERVAL_MS);
+  subscribers.add(res);
 
   req.on('close', () => {
     clearInterval(heartBeat);
     clearInterval(historicalPump);
-    clearInterval(livePump);
+    subscribers.delete(res);
   });
+}
+
+function bootstrapData() {
+  ensureDataFileExists();
+  loadEventsFromFile();
 }
 
 const server = http.createServer((req, res) => {
@@ -207,8 +356,20 @@ const server = http.createServer((req, res) => {
   res.end(JSON.stringify({ error: 'Not found' }));
 });
 
+bootstrapData();
+startLiveProducer();
+
 server.listen(PORT, () => {
   console.log(`[mock-sse] listening on http://localhost:${PORT}`);
   console.log('[mock-sse] stream:   /api/traffic/stream');
   console.log('[mock-sse] snapshot: /api/traffic/snapshot');
+  console.log(`[mock-sse] data file: ${DATA_FILE}`);
+});
+
+process.on('SIGINT', () => handleShutdown('SIGINT'));
+process.on('SIGTERM', () => handleShutdown('SIGTERM'));
+process.on('exit', () => {
+  if (!shutdownHandled) {
+    clearHistoryFile();
+  }
 });

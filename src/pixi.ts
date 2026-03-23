@@ -279,12 +279,14 @@ interface StreamHintEvent {
     format: string;
 }
 
-interface TimelineRecord {
-    id: string;
-    base?: TrafficBaseEvent;
-    hint?: TrafficHintEvent;
-    final?: TrafficFinalEvent;
-    receivedAt: number;
+type StreamEventKind = 'base' | 'hint' | 'final';
+
+interface QueuedStreamEvent {
+    kind: StreamEventKind;
+    payload: TrafficBaseEvent | TrafficHintEvent | TrafficFinalEvent;
+    arrivalTime: number;
+    eventTime: number;
+    seq: number;
 }
 
 // === Errors ===
@@ -350,27 +352,34 @@ function addError(fromIdx: number, toIdx: number) {
 let batches: Batch[] = [];
 
 const STREAM_URL = 'http://localhost:8787/api/traffic/stream';
+const SNAPSHOT_URL = 'http://localhost:8787/api/traffic/snapshot';
 let streamMode = false;
 let streamConnected = false;
 let streamStatusText = 'Stream: random fallback';
 let streamHintInfo: StreamHintEvent | null = null;
 let streamReconnectTimer: number | null = null;
+let snapshotLoading = false;
+let snapshotLoadingText = '';
 
 const requestsById = new Map<string, Batch>();
 const streamFlows = new Set<string>();
 const streamDestinations = new Set<string>();
 let lastAutoBoxCount = 0;
+const streamReplayQueue: QueuedStreamEvent[] = [];
+let streamReplayActive = false;
+let streamReplayAnchorArrival = 0;
+let streamReplayAnchorPlay = 0;
+let streamReplayAnchorEvent = 0;
+let streamReplayClock: 'arrival' | 'event' = 'arrival';
 
-const timelineById = new Map<string, TimelineRecord>();
-const timelineOrder: TimelineRecord[] = [];
-const bufferedLiveIds: string[] = [];
-const replayQueue: TrafficBaseEvent[] = [];
-let timelineRangeStart = 0;
-let timelineRangeEnd = 0;
+const requestTsById = new Map<string, number>();
+const timelineEvents: QueuedStreamEvent[] = [];
+const MAX_TIMELINE_EVENTS = 8000;
+let streamEventSeq = 0;
+let timelineStartTs = 0;
+let timelineEndTs = 0;
 let timelinePlayheadTs = 0;
-let isLivePinned = true;
-let timelineLoading = false;
-const MAX_TIMELINE_RECORDS = 1600;
+let streamSessionStartTs = 0;
 
 let connectionEdges: [number, number][] = [];
 
@@ -385,43 +394,6 @@ function buildConnectionEdges() {
                 connectionEdges.push([i, j]);
             }
         }
-    }
-}
-
-function randomBoxBatch(now: number): Batch {
-    const edge = connectionEdges[Math.floor(Math.random() * connectionEdges.length)];
-    const [fromIdx, toIdx] = Math.random() < 0.5 ? [edge[0], edge[1]] : [edge[1], edge[0]];
-    const from = boxes[fromIdx];
-    const to = boxes[toIdx];
-
-    return {
-        startX: boxCenterX(from),
-        startY: boxCenterY(from),
-        endX: boxCenterX(to),
-        endY: boxCenterY(to),
-        startTime: now,
-        duration: 1500 + Math.random() * 3500,
-        rgb: from.rgb,
-        colorNum: from.colorNum,
-        fromIdx,
-        toIdx,
-        radius: 6,
-    };
-}
-
-function initBatches() {
-    batches = [];
-    requestsById.clear();
-    const now = performance.now();
-    const target = fallbackBatchTarget();
-    for (let i = 0; i < target; i++) {
-        const batch = randomBoxBatch(now);
-        if (Math.random() < 0.7) {
-            batch.startTime = now - Math.random() * 0.8 * batch.duration;
-        } else {
-            batch.startTime = now + Math.random() * 3000;
-        }
-        batches.push(batch);
     }
 }
 
@@ -444,14 +416,10 @@ function radiusFromBytes(bytes: number): number {
     return clamp(4 + scaled, 4, 14);
 }
 
-function fallbackBatchTarget(): number {
-    return clamp(Math.floor(boxes.length * 1.4), 10, 220);
-}
-
 function autoBoxCountFromStream(): number {
     // Weighted by stream cardinality: more unique flows/destinations yields richer topology.
-    const weighted = streamFlows.size * 5 + streamDestinations.size * 6;
-    return clamp(weighted, 8, 140);
+    const weighted = streamFlows.size * 3 + streamDestinations.size * 4;
+    return clamp(weighted, 6, 90);
 }
 
 function syncBoxesToStreamData(force = false) {
@@ -468,113 +436,6 @@ function syncBoxesToStreamData(force = false) {
     lastAutoBoxCount = nextCount;
 }
 
-function formatClock(ts: number): string {
-    if (!ts) return '--:--:--';
-    return new Date(ts).toLocaleTimeString();
-}
-
-function updateTimelineRange(ts: number) {
-    if (!Number.isFinite(ts) || ts <= 0) return;
-    if (timelineRangeStart === 0 || ts < timelineRangeStart) timelineRangeStart = ts;
-    if (timelineRangeEnd === 0 || ts > timelineRangeEnd) timelineRangeEnd = ts;
-    if (isLivePinned) {
-        timelinePlayheadTs = timelineRangeEnd;
-    }
-}
-
-function upsertTimelineRecord(id: string): TimelineRecord {
-    const existing = timelineById.get(id);
-    if (existing) {
-        existing.receivedAt = performance.now();
-        return existing;
-    }
-    const created: TimelineRecord = { id, receivedAt: performance.now() };
-    timelineById.set(id, created);
-    timelineOrder.push(created);
-
-    if (timelineOrder.length > MAX_TIMELINE_RECORDS) {
-        const drop = timelineOrder.shift();
-        if (drop) {
-            timelineById.delete(drop.id);
-            const idx = bufferedLiveIds.indexOf(drop.id);
-            if (idx >= 0) bufferedLiveIds.splice(idx, 1);
-        }
-    }
-    return created;
-}
-
-function enqueueReplayAt(targetTs: number) {
-    replayQueue.length = 0;
-    const start = targetTs - 20_000;
-    const end = targetTs + 45_000;
-    const items = timelineOrder
-        .filter((r) => !!r.base && r.base!.ts >= start && r.base!.ts <= end)
-        .sort((a, b) => (a.base!.ts - b.base!.ts));
-    for (const item of items) {
-        replayQueue.push(item.base!);
-    }
-}
-
-function setTimelineLoading(next: boolean) {
-    timelineLoading = next;
-    if (timelineLoadingEl) {
-        timelineLoadingEl.classList.toggle('hidden', !next);
-    }
-}
-
-function applyTimelineSelection(targetTs: number) {
-    if (!timelineRangeStart || !timelineRangeEnd) return;
-    isLivePinned = false;
-    timelinePlayheadTs = clamp(targetTs, timelineRangeStart, timelineRangeEnd);
-    setTimelineLoading(true);
-
-    batches = [];
-    requestsById.clear();
-    replayQueue.length = 0;
-
-    window.setTimeout(() => {
-        enqueueReplayAt(timelinePlayheadTs);
-        setTimelineLoading(false);
-    }, 650);
-}
-
-function pinToLive() {
-    replayQueue.length = 0;
-    setTimelineLoading(false);
-    isLivePinned = true;
-    timelinePlayheadTs = timelineRangeEnd;
-    setPausedState(false);
-
-    // Build an immediate on-screen burst from buffered + latest known base events.
-    const bufferedRecentIds = bufferedLiveIds.slice(-90);
-    bufferedLiveIds.length = 0;
-    const immediateEvents: TrafficBaseEvent[] = [];
-
-    for (const id of bufferedRecentIds) {
-        const rec = timelineById.get(id);
-        if (rec?.base) immediateEvents.push(rec.base);
-    }
-
-    if (immediateEvents.length < 30) {
-        const latestKnown = timelineOrder.filter((r) => !!r.base).slice(-80);
-        for (const item of latestKnown) {
-            if (item.base) immediateEvents.push(item.base);
-        }
-    }
-
-    const dedup = new Map<string, TrafficBaseEvent>();
-    for (const ev of immediateEvents) dedup.set(ev.id, ev);
-    const burst = Array.from(dedup.values())
-        .sort((a, b) => a.ts - b.ts)
-        .slice(-45);
-
-    batches = [];
-    requestsById.clear();
-    for (const ev of burst) {
-        renderBaseEvent(ev);
-    }
-}
-
 function edgeForRequest(base: TrafficBaseEvent): [number, number] {
     if (connectionEdges.length === 0) return [0, 0];
     const key = `${base.id}-${base.flow}-${base.destination}`;
@@ -582,7 +443,31 @@ function edgeForRequest(base: TrafficBaseEvent): [number, number] {
     return connectionEdges[idx];
 }
 
-function renderBaseEvent(base: TrafficBaseEvent) {
+function isTrafficBaseEvent(v: any): v is TrafficBaseEvent {
+    return v && typeof v.id === 'string' && typeof v.ts === 'number' && typeof v.destination === 'string' && typeof v.flow === 'string';
+}
+
+function isTrafficHintEvent(v: any): v is TrafficHintEvent {
+    return v && typeof v.id === 'string' && typeof v.payload_size === 'number';
+}
+
+function isTrafficFinalEvent(v: any): v is TrafficFinalEvent {
+    return v && typeof v.id === 'string' && typeof v.ttfb === 'number' && typeof v.response_code === 'number';
+}
+
+function isStreamHintEvent(v: any): v is StreamHintEvent {
+    return v && typeof v.server_ts === 'number' && typeof v.utc_date === 'string' && v.available_range;
+}
+
+function handleTrafficBaseEvent(base: TrafficBaseEvent) {
+    const newFlow = !streamFlows.has(base.flow);
+    const newDestination = !streamDestinations.has(base.destination);
+    if (newFlow) streamFlows.add(base.flow);
+    if (newDestination) streamDestinations.add(base.destination);
+    if (newFlow || newDestination || boxes.length === 0 || connectionEdges.length === 0) {
+        syncBoxesToStreamData();
+    }
+
     if (boxes.length === 0 || connectionEdges.length === 0) return;
 
     const [fromIdx, toIdx] = edgeForRequest(base);
@@ -603,66 +488,11 @@ function renderBaseEvent(base: TrafficBaseEvent) {
         radius: 6,
     };
 
-    const rec = timelineById.get(base.id);
-    if (rec?.hint) {
-        batch.radius = radiusFromBytes(rec.hint.payload_size);
-        if (typeof rec.hint['ttfb-hint'] === 'number') {
-            batch.duration = clamp(rec.hint['ttfb-hint'] * 3, 300, 2400);
-        }
-    }
-    if (rec?.final) {
-        batch.duration = clamp(rec.final.ttfb * 3, 250, 4000);
-        batch.radius = radiusFromBytes(rec.final.response_size);
-    }
-
     batches.push(batch);
     requestsById.set(base.id, batch);
 }
 
-function isTrafficBaseEvent(v: any): v is TrafficBaseEvent {
-    return v && typeof v.id === 'string' && typeof v.ts === 'number' && typeof v.destination === 'string' && typeof v.flow === 'string';
-}
-
-function isTrafficHintEvent(v: any): v is TrafficHintEvent {
-    return v && typeof v.id === 'string' && typeof v.payload_size === 'number';
-}
-
-function isTrafficFinalEvent(v: any): v is TrafficFinalEvent {
-    return v && typeof v.id === 'string' && typeof v.ttfb === 'number' && typeof v.response_code === 'number';
-}
-
-function isStreamHintEvent(v: any): v is StreamHintEvent {
-    return v && typeof v.server_ts === 'number' && typeof v.utc_date === 'string' && v.available_range;
-}
-
-function handleTrafficBaseEvent(base: TrafficBaseEvent) {
-    const rec = upsertTimelineRecord(base.id);
-    rec.base = base;
-    updateTimelineRange(base.ts);
-
-    const newFlow = !streamFlows.has(base.flow);
-    const newDestination = !streamDestinations.has(base.destination);
-    if (newFlow) streamFlows.add(base.flow);
-    if (newDestination) streamDestinations.add(base.destination);
-    if (isLivePinned && (newFlow || newDestination || boxes.length === 0 || connectionEdges.length === 0)) {
-        syncBoxesToStreamData();
-    }
-
-    if (paused || !isLivePinned || timelineLoading) {
-        bufferedLiveIds.push(base.id);
-        if (bufferedLiveIds.length > MAX_TIMELINE_RECORDS) {
-            bufferedLiveIds.splice(0, bufferedLiveIds.length - MAX_TIMELINE_RECORDS);
-        }
-        return;
-    }
-
-    renderBaseEvent(base);
-}
-
 function handleTrafficHintEvent(hint: TrafficHintEvent) {
-    const rec = upsertTimelineRecord(hint.id);
-    rec.hint = hint;
-
     const batch = requestsById.get(hint.id);
     if (!batch) return;
 
@@ -673,9 +503,6 @@ function handleTrafficHintEvent(hint: TrafficHintEvent) {
 }
 
 function handleTrafficFinalEvent(finalEvent: TrafficFinalEvent) {
-    const rec = upsertTimelineRecord(finalEvent.id);
-    rec.final = finalEvent;
-
     const batch = requestsById.get(finalEvent.id);
     if (!batch) return;
 
@@ -684,6 +511,294 @@ function handleTrafficFinalEvent(finalEvent: TrafficFinalEvent) {
 
     if (finalEvent.response_code >= 400) {
         addError(batch.fromIdx, batch.toIdx);
+    }
+}
+
+function updateTimelineRange(ts: number) {
+    if (!Number.isFinite(ts) || ts <= 0) return;
+
+    // Anchor rewind range to the confirmed stream session start.
+    const effectiveTs = streamSessionStartTs > 0 ? Math.max(ts, streamSessionStartTs) : ts;
+
+    if (timelineStartTs === 0 || effectiveTs < timelineStartTs) timelineStartTs = effectiveTs;
+    if (timelineEndTs === 0 || effectiveTs > timelineEndTs) timelineEndTs = effectiveTs;
+    if (!streamReplayActive && !paused) {
+        timelinePlayheadTs = timelineEndTs;
+    }
+}
+
+function eventTimeFor(kind: StreamEventKind, payload: TrafficBaseEvent | TrafficHintEvent | TrafficFinalEvent): number {
+    if (kind === 'base') {
+        const base = payload as TrafficBaseEvent;
+        requestTsById.set(base.id, base.ts);
+        updateTimelineRange(base.ts);
+        return base.ts;
+    }
+
+    const id = (payload as TrafficHintEvent | TrafficFinalEvent).id;
+    const found = requestTsById.get(id);
+    if (typeof found === 'number') {
+        updateTimelineRange(found);
+        return found;
+    }
+
+    return timelineEndTs || Date.now();
+}
+
+function storeTimelineEvent(event: QueuedStreamEvent) {
+    timelineEvents.push(event);
+    if (timelineEvents.length > MAX_TIMELINE_EVENTS) {
+        timelineEvents.splice(0, timelineEvents.length - MAX_TIMELINE_EVENTS);
+    }
+}
+
+function eventFingerprint(event: QueuedStreamEvent): string {
+    const payload = event.payload as any;
+    const id = payload && typeof payload.id === 'string' ? payload.id : 'na';
+    return `${event.kind}|${id}|${event.eventTime}|${JSON.stringify(payload)}`;
+}
+
+function queuedFromSnapshotObject(
+    parsed: any,
+    baseTsById: Map<string, number>,
+    seqBase: number,
+    idx: number,
+): QueuedStreamEvent | null {
+    const fallbackTs = timelineEndTs || Date.now();
+
+    if (isTrafficBaseEvent(parsed)) {
+        return {
+            kind: 'base',
+            payload: parsed,
+            arrivalTime: seqBase + idx,
+            eventTime: parsed.ts,
+            seq: seqBase + idx,
+        };
+    }
+    if (isTrafficHintEvent(parsed)) {
+        const ts = baseTsById.get(parsed.id) || requestTsById.get(parsed.id) || fallbackTs;
+        return {
+            kind: 'hint',
+            payload: parsed,
+            arrivalTime: seqBase + idx,
+            eventTime: ts,
+            seq: seqBase + idx,
+        };
+    }
+    if (isTrafficFinalEvent(parsed)) {
+        const ts = baseTsById.get(parsed.id) || requestTsById.get(parsed.id) || fallbackTs;
+        return {
+            kind: 'final',
+            payload: parsed,
+            arrivalTime: seqBase + idx,
+            eventTime: ts,
+            seq: seqBase + idx,
+        };
+    }
+
+    return null;
+}
+
+async function loadSnapshotRangeIntoTimeline(fromTs: number, toTs: number, replaceExisting = false): Promise<void> {
+    if (snapshotLoading) return;
+
+    snapshotLoading = true;
+    snapshotLoadingText = 'LOADING SNAPSHOT...';
+    updateSnapshotLoadingUi();
+    updateLiveStateUi();
+    try {
+        const url = `${SNAPSHOT_URL}?from=${Math.floor(fromTs)}&to=${Math.floor(toTs)}`;
+        const response = await fetch(url);
+        if (!response.ok) return;
+
+        const contentLengthHeader = response.headers.get('content-length');
+        const totalBytes = contentLengthHeader ? Number(contentLengthHeader) : 0;
+        const reader = response.body?.getReader();
+        const decoder = new TextDecoder();
+
+        let text = '';
+        if (reader) {
+            let receivedBytes = 0;
+            while (true) {
+                const chunk = await reader.read();
+                if (chunk.done) break;
+
+                receivedBytes += chunk.value.length;
+                text += decoder.decode(chunk.value, { stream: true });
+
+                if (totalBytes > 0) {
+                    const pct = Math.min(99, Math.floor((receivedBytes / totalBytes) * 100));
+                    snapshotLoadingText = `LOADING SNAPSHOT... ${pct}%`;
+                } else {
+                    const kb = Math.floor(receivedBytes / 1024);
+                    snapshotLoadingText = `LOADING SNAPSHOT... ${kb}KB`;
+                }
+                updateSnapshotLoadingUi();
+            }
+            text += decoder.decode();
+        } else {
+            text = await response.text();
+        }
+
+        snapshotLoadingText = 'PROCESSING SNAPSHOT...';
+        updateSnapshotLoadingUi();
+        const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
+        const parsedObjects: any[] = [];
+        for (const line of lines) {
+            try {
+                parsedObjects.push(JSON.parse(line));
+            } catch {
+                // Skip malformed NDJSON rows.
+            }
+        }
+
+        const baseTsById = new Map<string, number>();
+        for (const item of parsedObjects) {
+            if (isTrafficBaseEvent(item)) {
+                baseTsById.set(item.id, item.ts);
+            }
+        }
+
+        const seqBase = streamEventSeq;
+        const normalized: QueuedStreamEvent[] = [];
+        for (let i = 0; i < parsedObjects.length; i++) {
+            const q = queuedFromSnapshotObject(parsedObjects[i], baseTsById, seqBase, i);
+            if (q) normalized.push(q);
+        }
+
+        normalized.sort((a, b) => (a.eventTime - b.eventTime) || (a.seq - b.seq));
+
+        if (replaceExisting) {
+            timelineEvents.length = 0;
+            requestTsById.clear();
+            timelineStartTs = streamSessionStartTs || timelineStartTs;
+            timelineEndTs = timelineStartTs;
+            timelinePlayheadTs = timelineStartTs;
+        }
+
+        const existingFingerprints = new Set<string>();
+        for (const existing of timelineEvents) {
+            existingFingerprints.add(eventFingerprint(existing));
+        }
+
+        for (const item of normalized) {
+            const fingerprint = eventFingerprint(item);
+            if (existingFingerprints.has(fingerprint)) continue;
+
+            existingFingerprints.add(fingerprint);
+            if (replaceExisting) {
+                // Keep full snapshot window intact; do not trim to MAX_TIMELINE_EVENTS.
+                timelineEvents.push(item);
+            } else {
+                storeTimelineEvent(item);
+            }
+            streamEventSeq = Math.max(streamEventSeq, item.seq + 1);
+            updateTimelineRange(item.eventTime);
+
+            if (item.kind === 'base') {
+                const base = item.payload as TrafficBaseEvent;
+                requestTsById.set(base.id, base.ts);
+            }
+        }
+    } finally {
+        snapshotLoading = false;
+        snapshotLoadingText = '';
+        updateSnapshotLoadingUi();
+        updateLiveStateUi();
+        updateTimelineUi();
+    }
+}
+
+function replayFromTimestamp(targetTs: number) {
+    if (!timelineStartTs || !timelineEndTs || timelineEvents.length === 0) return;
+
+    const clampedTarget = clamp(targetTs, timelineStartTs, timelineEndTs);
+    const replayEvents = timelineEvents
+        .filter((e) => e.eventTime >= clampedTarget)
+        .sort((a, b) => (a.eventTime - b.eventTime) || (a.seq - b.seq));
+
+    batches = [];
+    requestsById.clear();
+
+    streamReplayQueue.length = 0;
+    for (const event of replayEvents) {
+        streamReplayQueue.push({ ...event });
+    }
+
+    streamReplayClock = 'event';
+    streamReplayActive = streamReplayQueue.length > 0;
+    streamReplayAnchorPlay = performance.now();
+    streamReplayAnchorEvent = streamReplayQueue.length > 0 ? streamReplayQueue[0].eventTime : clampedTarget;
+
+    timelinePlayheadTs = clampedTarget;
+    setPausedState(false);
+}
+
+function goToLive() {
+    streamReplayQueue.length = 0;
+    streamReplayActive = false;
+    streamReplayClock = 'arrival';
+    timelinePlayheadTs = timelineEndTs || timelinePlayheadTs;
+    setPausedState(false);
+}
+
+function processStreamEvent(kind: StreamEventKind, payload: TrafficBaseEvent | TrafficHintEvent | TrafficFinalEvent) {
+    if (kind === 'base') {
+        handleTrafficBaseEvent(payload as TrafficBaseEvent);
+        return;
+    }
+    if (kind === 'hint') {
+        handleTrafficHintEvent(payload as TrafficHintEvent);
+        return;
+    }
+    handleTrafficFinalEvent(payload as TrafficFinalEvent);
+}
+
+function enqueueStreamEvent(kind: StreamEventKind, payload: TrafficBaseEvent | TrafficHintEvent | TrafficFinalEvent) {
+    const arrival = performance.now();
+    const eventTime = eventTimeFor(kind, payload);
+    const queued: QueuedStreamEvent = {
+        kind,
+        payload,
+        arrivalTime: arrival,
+        eventTime,
+        seq: streamEventSeq++,
+    };
+
+    storeTimelineEvent(queued);
+
+    if (!paused && !streamReplayActive) {
+        processStreamEvent(kind, payload);
+        return;
+    }
+
+    if (streamReplayQueue.length === 0) {
+        streamReplayAnchorArrival = arrival;
+        streamReplayAnchorEvent = eventTime;
+        streamReplayAnchorPlay = performance.now();
+    }
+
+    streamReplayQueue.push(queued);
+}
+
+function flushStreamReplay(nowPerf: number) {
+    if (!streamReplayActive) return;
+
+    while (streamReplayQueue.length > 0) {
+        const next = streamReplayQueue[0];
+        const scheduledAt = streamReplayClock === 'event'
+            ? streamReplayAnchorPlay + (next.eventTime - streamReplayAnchorEvent)
+            : streamReplayAnchorPlay + (next.arrivalTime - streamReplayAnchorArrival);
+        if (scheduledAt > nowPerf) break;
+
+        streamReplayQueue.shift();
+        processStreamEvent(next.kind, next.payload);
+        timelinePlayheadTs = next.eventTime;
+    }
+
+    if (streamReplayQueue.length === 0) {
+        streamReplayActive = false;
+        streamReplayClock = 'arrival';
     }
 }
 
@@ -696,20 +811,22 @@ function openTrafficStream() {
         source.addEventListener('open', () => {
             streamConnected = true;
             streamStatusText = 'Stream: connected';
+            streamSessionStartTs = Date.now();
             streamFlows.clear();
             streamDestinations.clear();
-            timelineById.clear();
-            timelineOrder.length = 0;
-            bufferedLiveIds.length = 0;
-            replayQueue.length = 0;
-            timelineRangeStart = 0;
-            timelineRangeEnd = 0;
-            timelinePlayheadTs = 0;
-            isLivePinned = true;
             batches = [];
             requestsById.clear();
+            requestTsById.clear();
+            timelineEvents.length = 0;
+            streamReplayQueue.length = 0;
+            streamReplayActive = false;
+            streamReplayClock = 'arrival';
+            timelineStartTs = streamSessionStartTs;
+            timelineEndTs = streamSessionStartTs;
+            timelinePlayheadTs = streamSessionStartTs;
             syncBoxesToStreamData(true);
-            setTimelineLoading(false);
+            updateTimelineUi();
+            updateLiveStateUi();
         });
 
         source.addEventListener('hint', (ev: MessageEvent) => {
@@ -717,11 +834,12 @@ function openTrafficStream() {
                 const parsed = JSON.parse(ev.data);
                 if (isStreamHintEvent(parsed)) {
                     streamHintInfo = parsed;
-                    if (timelineRangeStart === 0) {
-                        timelineRangeStart = parsed.available_range.from;
+                    updateTimelineRange(parsed.available_range.from);
+                    updateTimelineRange(parsed.available_range.to);
+                    if (!streamReplayActive && !paused) {
+                        timelinePlayheadTs = timelineEndTs;
                     }
-                    timelineRangeEnd = Math.max(timelineRangeEnd, parsed.available_range.to);
-                    if (isLivePinned) timelinePlayheadTs = timelineRangeEnd;
+                    updateTimelineUi();
                 }
             } catch {
                 // Keep rendering, ignore malformed hint payloads.
@@ -732,15 +850,15 @@ function openTrafficStream() {
             try {
                 const parsed = JSON.parse(ev.data);
                 if (isTrafficBaseEvent(parsed)) {
-                    handleTrafficBaseEvent(parsed);
+                    enqueueStreamEvent('base', parsed);
                     return;
                 }
                 if (isTrafficHintEvent(parsed)) {
-                    handleTrafficHintEvent(parsed);
+                    enqueueStreamEvent('hint', parsed);
                     return;
                 }
                 if (isTrafficFinalEvent(parsed)) {
-                    handleTrafficFinalEvent(parsed);
+                    enqueueStreamEvent('final', parsed);
                 }
             } catch {
                 // Keep rendering, ignore malformed event payloads.
@@ -753,11 +871,15 @@ function openTrafficStream() {
             source.close();
             if (streamReconnectTimer !== null) window.clearTimeout(streamReconnectTimer);
             streamReconnectTimer = window.setTimeout(() => openTrafficStream(), 1500);
+            updateTimelineUi();
+            updateLiveStateUi();
         });
     } catch {
         streamMode = false;
         streamConnected = false;
         streamStatusText = 'Stream: random fallback';
+        updateTimelineUi();
+        updateLiveStateUi();
     }
 }
 
@@ -833,33 +955,7 @@ ensureErrorSpritePool(20);
 
 generateBoxes(8);
 buildConnectionEdges();
-initBatches();
 openTrafficStream();
-
-// === UI Controls ===
-const timelineTrackEl = document.getElementById('timeline-track') as HTMLElement | null;
-const timelineBufferEl = document.getElementById('timeline-buffer') as HTMLElement | null;
-const timelineCursorEl = document.getElementById('timeline-cursor') as HTMLElement | null;
-const timelineCurrentEl = document.getElementById('timeline-current') as HTMLElement | null;
-const timelineLoadingEl = document.getElementById('timeline-loading') as HTMLElement | null;
-const liveIndicatorEl = document.getElementById('live-indicator') as HTMLElement | null;
-const btnLive = document.getElementById('btn-live') as HTMLButtonElement | null;
-
-if (timelineTrackEl) {
-    timelineTrackEl.addEventListener('click', (ev: MouseEvent) => {
-        if (!timelineRangeStart || !timelineRangeEnd || timelineRangeEnd <= timelineRangeStart) return;
-        const rect = timelineTrackEl.getBoundingClientRect();
-        const ratio = clamp((ev.clientX - rect.left) / rect.width, 0, 1);
-        const targetTs = timelineRangeStart + (timelineRangeEnd - timelineRangeStart) * ratio;
-        applyTimelineSelection(targetTs);
-    });
-}
-
-if (btnLive) {
-    btnLive.addEventListener('click', () => {
-        pinToLive();
-    });
-}
 
 // === Pause ===
 let paused = false;
@@ -867,32 +963,77 @@ let pauseTimeOffset = 0;
 let pauseStartTime = 0;
 
 const btnPause = document.getElementById('btn-pause')!;
+const btnLive = document.getElementById('btn-live') as HTMLButtonElement | null;
+const liveState = document.getElementById('live-state') as HTMLSpanElement | null;
+
+function updateLiveStateUi() {
+    if (!liveState) return;
+
+    let stateClass = 'disconnected';
+    let stateLabel = 'DISCONNECTED';
+
+    if (snapshotLoading) {
+        stateClass = 'buffering';
+        stateLabel = 'LOADING';
+    } else if (streamConnected) {
+        if (paused) {
+            stateClass = 'paused';
+            stateLabel = 'PAUSED';
+        } else if (streamReplayActive || streamReplayQueue.length > 0) {
+            stateClass = 'buffering';
+            stateLabel = 'BUFFERING';
+        } else {
+            stateClass = 'live';
+            stateLabel = 'LIVE';
+        }
+    }
+
+    liveState.className = `state-badge ${stateClass}`;
+    liveState.textContent = stateLabel;
+
+    if (btnLive) {
+        const alreadyLive = streamConnected && !paused && !streamReplayActive && streamReplayQueue.length === 0;
+        btnLive.disabled = alreadyLive;
+    }
+}
 
 function setPausedState(nextPaused: boolean) {
     if (nextPaused === paused) return;
-    paused = nextPaused;
 
+    paused = nextPaused;
     if (paused) {
-        if (isLivePinned) {
-            // Like a live stream player: pausing drops you behind live while new data keeps buffering.
-            isLivePinned = false;
-            timelinePlayheadTs = timelineRangeEnd;
-        }
         pauseStartTime = performance.now();
         btnPause.innerHTML = '&#9654; Hervat';
         btnPause.classList.add('paused');
+        updateLiveStateUi();
         return;
     }
 
     pauseTimeOffset += performance.now() - pauseStartTime;
-    setTimelineLoading(false);
+    if (streamReplayQueue.length > 0) {
+        streamReplayActive = true;
+        streamReplayClock = 'arrival';
+        streamReplayAnchorArrival = streamReplayQueue[0].arrivalTime;
+        streamReplayAnchorEvent = streamReplayQueue[0].eventTime;
+        streamReplayAnchorPlay = performance.now();
+    }
     btnPause.innerHTML = '&#10074;&#10074; Pauze';
     btnPause.classList.remove('paused');
+    updateLiveStateUi();
 }
 
 btnPause.addEventListener('click', () => {
     setPausedState(!paused);
 });
+
+if (btnLive) {
+    btnLive.addEventListener('click', () => {
+        goToLive();
+        updateLiveStateUi();
+    });
+}
+
+updateLiveStateUi();
 
 // === Zoom & Pan ===
 let zoomLevel = 1;
@@ -902,6 +1043,78 @@ let panX = 0;
 let panY = 0;
 
 const zoomLabel = document.getElementById('zoom-level')!;
+const timelineSlider = document.getElementById('timeline-slider') as HTMLInputElement | null;
+const timelineCurrent = document.getElementById('timeline-current') as HTMLSpanElement | null;
+const timelineStart = document.getElementById('timeline-start') as HTMLSpanElement | null;
+const timelineEnd = document.getElementById('timeline-end') as HTMLSpanElement | null;
+const timelineLoading = document.getElementById('timeline-loading') as HTMLSpanElement | null;
+
+function updateSnapshotLoadingUi() {
+    if (!timelineLoading) return;
+
+    if (!snapshotLoading) {
+        timelineLoading.classList.add('hidden');
+        timelineLoading.textContent = '';
+        return;
+    }
+
+    timelineLoading.classList.remove('hidden');
+    timelineLoading.textContent = snapshotLoadingText || 'LOADING SNAPSHOT...';
+}
+
+function formatTimelineTime(ts: number): string {
+    if (!ts) return '--:--:--';
+    return new Date(ts).toLocaleTimeString();
+}
+
+function timelineRatioFromTs(ts: number): number {
+    if (!timelineStartTs || timelineEndTs <= timelineStartTs) return 1;
+    return clamp((ts - timelineStartTs) / (timelineEndTs - timelineStartTs), 0, 1);
+}
+
+function updateTimelineUi() {
+    if (timelineStart) timelineStart.textContent = formatTimelineTime(timelineStartTs);
+    if (timelineEnd) timelineEnd.textContent = formatTimelineTime(timelineEndTs);
+    if (timelineCurrent) timelineCurrent.textContent = formatTimelineTime(timelinePlayheadTs || timelineEndTs);
+
+    if (!timelineSlider) return;
+    const ratio = timelineRatioFromTs(timelinePlayheadTs || timelineEndTs);
+    timelineSlider.value = `${Math.round(ratio * 1000)}`;
+
+    const bufferedRatio = timelineRatioFromTs(timelineEndTs);
+    const playPct = Math.round(ratio * 100);
+    const bufferedPct = Math.round(bufferedRatio * 100);
+    timelineSlider.style.background = `linear-gradient(90deg, #22c55e 0% ${playPct}%, #475569 ${playPct}% ${bufferedPct}%, #1f2937 ${bufferedPct}% 100%)`;
+    updateSnapshotLoadingUi();
+}
+
+if (timelineSlider) {
+    timelineSlider.addEventListener('input', () => {
+        if (!timelineStartTs || timelineEndTs <= timelineStartTs) return;
+        const ratio = Number(timelineSlider.value) / 1000;
+        const targetTs = timelineStartTs + ratio * (timelineEndTs - timelineStartTs);
+        timelinePlayheadTs = targetTs;
+        if (timelineCurrent) timelineCurrent.textContent = formatTimelineTime(targetTs);
+    });
+
+    timelineSlider.addEventListener('change', async () => {
+        if (!timelineStartTs || timelineEndTs <= timelineStartTs) return;
+        const ratio = Number(timelineSlider.value) / 1000;
+        const targetTs = timelineStartTs + ratio * (timelineEndTs - timelineStartTs);
+
+        const nearLiveThresholdMs = 1200;
+        if (timelineEndTs - targetTs <= nearLiveThresholdMs) {
+            goToLive();
+            updateLiveStateUi();
+            return;
+        }
+
+        const toTs = timelineEndTs || Date.now();
+        await loadSnapshotRangeIntoTimeline(targetTs, toTs, true);
+        replayFromTimestamp(targetTs);
+        updateLiveStateUi();
+    });
+}
 
 function updateZoomLabel() {
     zoomLabel.textContent = `Zoom: ${Math.round(zoomLevel * 100)}%`;
@@ -1272,29 +1485,34 @@ const fpsText = new PIXI.BitmapText({ text: 'FPS: 0', style: hudStyle });
 fpsText.x = 10; fpsText.y = 8;
 hudContainer.addChild(fpsText);
 
+const batchText = new PIXI.BitmapText({ text: 'Batches: 0', style: hudStyle });
+batchText.x = 10; batchText.y = 30;
+hudContainer.addChild(batchText);
+
 const zoomText = new PIXI.BitmapText({ text: 'Zoom: 100%', style: hudStyle });
-zoomText.x = 10; zoomText.y = 30;
+zoomText.x = 10; zoomText.y = 52;
 hudContainer.addChild(zoomText);
 
 const boxCountText = new PIXI.BitmapText({ text: 'Boxes: 0', style: hudStyle });
-boxCountText.x = 10; boxCountText.y = 52;
+boxCountText.x = 10; boxCountText.y = 74;
 hudContainer.addChild(boxCountText);
 
 const errorCountText = new PIXI.BitmapText({ text: 'Errors: 0', style: hudStyle });
-errorCountText.x = 10; errorCountText.y = 74;
+errorCountText.x = 10; errorCountText.y = 96;
 hudContainer.addChild(errorCountText);
 
 const pauseText = new PIXI.BitmapText({ text: 'PAUSED', style: { fontFamily: 'monospace', fontSize: 20, fill: 0xef4444 } });
-pauseText.x = 10; pauseText.y = 100;
+pauseText.x = 10; pauseText.y = 122;
 pauseText.visible = false;
 hudContainer.addChild(pauseText);
 
 const streamText = new PIXI.BitmapText({ text: 'Stream: random fallback', style: { fontFamily: 'monospace', fontSize: 13, fill: 0x9ae6b4 } });
-streamText.x = 10; streamText.y = 126;
+streamText.x = 10; streamText.y = 148;
 hudContainer.addChild(streamText);
 
 // Cached HUD values — only update Text when value changes
 let lastHudFps = -1;
+let lastHudBatchStr = '';
 let lastHudZoomStr = '';
 let lastHudBoxCount = -1;
 let lastHudErrors = -1;
@@ -1305,6 +1523,13 @@ let lastHudStream = '';
 function tickFrame() {
     const realNow = performance.now();
     const now = paused ? pauseStartTime - pauseTimeOffset : realNow - pauseTimeOffset;
+
+    if (!paused) {
+        flushStreamReplay(realNow);
+        if (!streamReplayActive && timelineEndTs > 0) {
+            timelinePlayheadTs = timelineEndTs;
+        }
+    }
 
     frameCount++;
     if (realNow - lastFpsTime >= 1000) {
@@ -1330,50 +1555,12 @@ function tickFrame() {
             }
         }
         batches.length = writeIdx;
-
-        if (!streamMode || !streamConnected) {
-            const deficit = fallbackBatchTarget() - batches.length;
-            const spawnCount = deficit > 0
-                ? Math.max(1, Math.floor(deficit * 0.1))
-                : (Math.random() < 0.02 ? 1 : 0);
-            for (let i = 0; i < spawnCount; i++) {
-                const batch = randomBoxBatch(now);
-                batch.startTime = now + Math.random() * 500;
-                batches.push(batch);
-            }
-        }
-
-        if (!timelineLoading && !isLivePinned) {
-            const replayBurst = Math.min(8, replayQueue.length);
-            for (let i = 0; i < replayBurst; i++) {
-                const base = replayQueue.shift();
-                if (!base) break;
-                renderBaseEvent(base);
-                timelinePlayheadTs = base.ts;
-            }
-
-            if (replayQueue.length === 0) {
-                const backlogBurst = Math.min(10, bufferedLiveIds.length);
-                for (let i = 0; i < backlogBurst; i++) {
-                    const nextId = bufferedLiveIds.shift();
-                    if (!nextId) break;
-                    const rec = timelineById.get(nextId);
-                    if (!rec?.base) continue;
-                    renderBaseEvent(rec.base);
-                    timelinePlayheadTs = rec.base.ts;
-                }
-
-                if (bufferedLiveIds.length === 0) {
-                    isLivePinned = true;
-                    timelinePlayheadTs = timelineRangeEnd;
-                }
-            }
-        }
     }
 
     // ============================================================
     // BATCH CIRCLES — Sprite pool (geen Graphics.clear() meer!)
     // ============================================================
+    let activeCount = 0;
     lastBatchPosCount = 0;
 
     // Ensure pool is big enough
@@ -1385,6 +1572,7 @@ function tickFrame() {
         const progress = (now - batch.startTime) / batch.duration;
         if (progress < 0 || progress >= 1) continue;
 
+        activeCount++;
         const p = Math.min(progress, 1);
         const x = batch.startX + (batch.endX - batch.startX) * p;
         const y = batch.startY + (batch.endY - batch.startY) * p;
@@ -1487,6 +1675,12 @@ function tickFrame() {
         lastHudFps = fps;
     }
 
+    const batchStr = `Batches: ${batches.length} (visible: ${activeCount})`;
+    if (batchStr !== lastHudBatchStr) {
+        batchText.text = batchStr;
+        lastHudBatchStr = batchStr;
+    }
+
     const zoomStr = `Zoom: ${Math.round(zoomLevel * 100)}%`;
     if (zoomStr !== lastHudZoomStr) {
         zoomText.text = zoomStr;
@@ -1518,24 +1712,8 @@ function tickFrame() {
         lastHudStream = streamInfo;
     }
 
-    const hasRange = timelineRangeStart > 0 && timelineRangeEnd > timelineRangeStart;
-    const playhead = isLivePinned ? timelineRangeEnd : timelinePlayheadTs;
-    if (timelineCurrentEl) {
-        timelineCurrentEl.textContent = formatClock(playhead);
-    }
-    if (timelineCursorEl) {
-        const ratio = hasRange ? clamp((playhead - timelineRangeStart) / (timelineRangeEnd - timelineRangeStart), 0, 1) : 0;
-        timelineCursorEl.style.left = `${(ratio * 100).toFixed(2)}%`;
-    }
-    if (timelineBufferEl) {
-        const bufferRatio = hasRange ? 1 : 0;
-        timelineBufferEl.style.width = `${(bufferRatio * 100).toFixed(2)}%`;
-    }
-    if (liveIndicatorEl) {
-        const liveState = isLivePinned && streamConnected && !timelineLoading;
-        liveIndicatorEl.classList.toggle('live', liveState);
-        liveIndicatorEl.textContent = liveState ? 'LIVE' : 'BUFFER';
-    }
+    updateTimelineUi();
+    updateLiveStateUi();
 }
 
 // Ticker calls tickFrame for normal (vsync) mode
