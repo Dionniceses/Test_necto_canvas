@@ -5,8 +5,12 @@ import {
   EngineInitOptions,
 } from './engine.contract';
 import { Batch, Box, BoxErrors, ErrorEntry, HudStats, Selection } from './engine.types';
-
-declare const PIXI: any;
+import {
+  Application,
+  Container,
+  Graphics,
+  Sprite,
+} from 'pixi.js';
 
 const DEFAULT_BATCH_COUNT = 50;
 const DEFAULT_BOX_COUNT = 75;
@@ -304,7 +308,7 @@ export class PixiEngine implements EngineApi {
     // Hide the <canvas> Angular gave us — PixiJS creates its own
     this.elements.canvas.style.display = 'none';
 
-    this.app = new PIXI.Application();
+    this.app = new Application();
     await this.app.init({
       width: W,
       height: H,
@@ -341,33 +345,33 @@ export class PixiEngine implements EngineApi {
     this.worldH = H * 5;
 
     // World container (PixiJS scene graph — only dynamic sprites + static cached graphics)
-    this.worldContainer = new PIXI.Container();
+    this.worldContainer = new Container();
     this.worldContainer.isRenderGroup = true;
     this.app.stage.addChild(this.worldContainer);
 
     // No hudContainer in PixiJS anymore — HUD is drawn on overlayCanvas
 
     // Circle textures
-    const cg = new PIXI.Graphics();
+    const cg = new Graphics();
     cg.circle(0, 0, 16);
     cg.fill(0xffffff);
     this.circleTexture = this.app.renderer.generateTexture(cg);
     cg.destroy();
 
-    const eg = new PIXI.Graphics();
+    const eg = new Graphics();
     eg.circle(0, 0, 16);
     eg.fill(0xf02b2b);
     this.errorCircleTexture = this.app.renderer.generateTexture(eg);
     eg.destroy();
 
     // Graphics layers (only in PixiJS scene)
-    this.linesGraphics = new PIXI.Graphics();
-    this.boxesGraphics = new PIXI.Graphics();
-    this.highlightGraphics = new PIXI.Graphics();
+    this.linesGraphics = new Graphics();
+    this.boxesGraphics = new Graphics();
+    this.highlightGraphics = new Graphics();
 
-    this.batchSpriteContainer = new PIXI.Container();
+    this.batchSpriteContainer = new Container();
     this.batchSpriteContainer.cullable = true;
-    this.errorSpriteContainer = new PIXI.Container();
+    this.errorSpriteContainer = new Container();
     this.errorSpriteContainer.cullable = true;
 
     this.worldContainer.addChild(this.linesGraphics);
@@ -419,7 +423,7 @@ export class PixiEngine implements EngineApi {
   private ensureBatchSpritePool(needed: number): void {
     const scale = 6 / 16;
     while (this.batchSpritePool.length < needed) {
-      const s = new PIXI.Sprite(this.circleTexture);
+      const s = new Sprite(this.circleTexture);
       s.anchor.set(0.5, 0.5);
       s.scale.set(scale);  // static — ParticleContainer has scale:false
       s.visible = false;
@@ -431,7 +435,7 @@ export class PixiEngine implements EngineApi {
   private ensureErrorSpritePool(needed: number): void {
     const scale = 9 / 16;
     while (this.errorSpritePool.length < needed) {
-      const s = new PIXI.Sprite(this.errorCircleTexture);
+      const s = new Sprite(this.errorCircleTexture);
       s.anchor.set(0.5, 0.5);
       s.scale.set(scale);
       s.visible = false;

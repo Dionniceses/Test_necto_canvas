@@ -7,7 +7,8 @@
     "start": "lite-server",
     "build": "tsc",
     "dev": "tsc --watch",
-    "mock:sse": "node mock-sse-server.js"
+    "mock:sse": "node mock-sse-server.js",
+    "mock:cockpit": "node mockserver.ts"
   },
   "keywords": [],
   "author": "",

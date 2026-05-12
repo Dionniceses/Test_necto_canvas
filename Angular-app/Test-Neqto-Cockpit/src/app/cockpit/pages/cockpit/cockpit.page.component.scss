@@ -1,0 +1,70 @@
+.cockpit-page {
+  padding: 2rem;
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 4rem);
+  overflow: hidden;
+
+  app-pixi-canvas {
+    display: block;
+    flex: 1;
+    position: relative;
+  }
+
+  .date-picker-wrapper {
+    position: absolute;
+    bottom: 6rem;
+    left: 6rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    background-color: #fafafa;
+    z-index: 10;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+
+    .arrow-btn {
+      background: none;
+      border: 1px solid #d0d0d0;
+      padding: 0.5rem 0.75rem;
+      cursor: pointer;
+      border-radius: 3px;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #666;
+      min-width: 36px;
+      height: 36px;
+
+      &:hover:not(.disabled) {
+        background-color: #e8f4f8;
+        border-color: #999;
+        color: #333;
+      }
+
+      &:active:not(.disabled) {
+        background-color: #d0e8f0;
+      }
+
+      &.disabled,
+      &:disabled {
+        cursor: not-allowed;
+        opacity: 0.4;
+        color: #ccc;
+        border-color: #e0e0e0;
+        background-color: transparent;
+      }
+
+      i {
+        font-size: 0.9rem;
+      }
+    }
+
+    p-date-picker {
+      flex-shrink: 0;
+    }
+  }
+}
