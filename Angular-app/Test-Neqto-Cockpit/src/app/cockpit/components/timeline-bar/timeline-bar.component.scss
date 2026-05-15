@@ -1,0 +1,127 @@
+:host {
+  display: block;
+  width: 100%;
+}
+
+$track-h: 4px;
+$track-h-hover: 6px;
+$playhead-size: 14px;
+
+.timeline {
+  padding: 20px 28px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 8px;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+// ─── Track area ───────────────────────────────────────────────────────────────
+
+.timeline__track-area {
+  // Right margin leaves room for the half-playhead that overhangs
+  margin-right: calc(#{$playhead-size} * 0.5);
+  position: relative;
+  height: 40px;
+  cursor: pointer;
+  overflow: visible;
+
+  &:hover {
+    .timeline__track-bg,
+    .timeline__track-fill {
+      height: $track-h-hover;
+    }
+
+    .timeline__playhead {
+      transform: translate(50%, -50%) scale(1.25);
+    }
+  }
+}
+
+.timeline__track-bg,
+.timeline__track-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: $track-h;
+  border-radius: 3px;
+  transition: height 120ms ease;
+  pointer-events: none;
+}
+
+.timeline__track-bg {
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.timeline__track-fill {
+  background: #e53935;
+}
+
+// ─── Hover marker ────────────────────────────────────────────────────────────
+
+.timeline__hover-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--hover-pct);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.timeline__hover-needle {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 1px;
+}
+
+.timeline__hover-tooltip {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(15, 15, 15, 0.82);
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 500;
+  padding: 3px 7px;
+  border-radius: 4px;
+  white-space: nowrap;
+  letter-spacing: 0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+// ─── Playhead (on the line, right edge) ──────────────────────────────────────
+
+.timeline__playhead {
+  position: absolute;
+  right: calc(#{$playhead-size} * -0.5);
+  top: 50%;
+  transform: translate(50%, -50%);
+  width: $playhead-size;
+  height: $playhead-size;
+  background: #e53935;
+  border-radius: 50%;
+  box-shadow: 0 1px 5px rgba(229, 57, 53, 0.55);
+  transition: transform 120ms ease;
+  pointer-events: none;
+}
+
+.timeline__playhead-time {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #e53935;
+  white-space: nowrap;
+  letter-spacing: 0.03em;
+  font-variant-numeric: tabular-nums;
+}

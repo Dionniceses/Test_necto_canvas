@@ -1,1 +1,28 @@
-<div #pixiHost class="pixi-canvas-host"></div>
+<div class="pixi-canvas-shell">
+  <div #pixiHost class="pixi-canvas-host"></div>
+
+  <app-tenant-select class="tenant-select-overlay" />
+
+  <app-cockpit-destination-sidebar
+    [visible]="destinationSidebarVisible()"
+    [destinationName]="selectedDestinationName()"
+    (visibleChange)="onDestinationSidebarVisibleChange($event)" />
+
+  <app-request-info-popup class="request-info-overlay" />
+
+  <app-pause-live
+    class="pause-live-overlay"
+    [class.pause-live-overlay--shifted]="destinationSidebarVisible()"
+    [isPaused]="isPaused()"
+    [isLive]="isLive()"
+    [fps]="currentFps()"
+    [bufferedEventCount]="bufferedEventCount()"
+    (pauseToggled)="onTogglePause()"
+    (goLive)="onGoLive()" />
+
+  <app-datepicker class="datepicker-overlay" />
+
+  <app-timeline-bar
+    class="timeline-bar-overlay"
+    [class.timeline-bar-overlay--shifted]="destinationSidebarVisible()" />
+</div>

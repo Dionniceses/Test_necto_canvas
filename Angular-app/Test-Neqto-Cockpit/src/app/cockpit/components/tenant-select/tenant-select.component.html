@@ -1,0 +1,10 @@
+<div class="tenant-select">
+  <cap-dropdown
+    panelStyleClass="cockpit-tenant-select-panel"
+    [formControl]="tenantControl"
+    [options]="tenants()"
+    [placeholder]="'cockpit.tenant-select.placeholder' | translate"
+    appendTo="body"
+    (changeSelection)="onTenantChange($event.value)">
+  </cap-dropdown>
+</div>

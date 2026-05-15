@@ -1,0 +1,21 @@
+<div class="timeline">
+  <div
+    class="timeline__track-area"
+    (mousemove)="onTrackMouseMove($event)"
+    (mouseleave)="onTrackMouseLeave()">
+
+    <div class="timeline__track-bg"></div>
+    <div class="timeline__track-fill"></div>
+
+    @if (hoverPercent() !== null) {
+      <div class="timeline__hover-marker">
+        <span class="timeline__hover-tooltip">{{ hoverTime() }}</span>
+        <div class="timeline__hover-needle"></div>
+      </div>
+    }
+
+    <div class="timeline__playhead">
+      <span class="timeline__playhead-time">{{ playheadTime() }}</span>
+    </div>
+  </div>
+</div>

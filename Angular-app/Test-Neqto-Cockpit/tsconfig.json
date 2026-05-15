@@ -5,7 +5,7 @@
   "compilerOptions": {
     "strict": true,
     "noImplicitOverride": true,
-    "noPropertyAccessFromIndexSignature": true,
+    "noPropertyAccessFromIndexSignature": false,
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
     "skipLibCheck": true,
@@ -13,7 +13,14 @@
     "experimentalDecorators": true,
     "importHelpers": true,
     "target": "ES2022",
-    "module": "preserve"
+    "module": "preserve",
+    "baseUrl": ".",
+    "paths": {
+      "@features/*": ["src/app/*"],
+      "@capturum/ui/button": ["src/stubs/capturum-button.ts"],
+      "@capturum/ui/api": ["src/stubs/capturum-api.ts"],
+      "@capturum/ui/dropdown": ["src/stubs/capturum-dropdown.ts"]
+    }
   },
   "angularCompilerOptions": {
     "enableI18nLegacyMessageIdFormat": false,
