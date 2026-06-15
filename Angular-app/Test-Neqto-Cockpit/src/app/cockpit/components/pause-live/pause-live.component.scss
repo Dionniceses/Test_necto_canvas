@@ -1,0 +1,85 @@
+:host {
+  --pause-live-panel-gap: 8px;
+  --pause-live-panel-padding: 8px;
+  --pause-live-panel-radius: 10px;
+  --pause-live-panel-bg: rgba(255, 255, 255, 0.94);
+  --pause-live-panel-border-color: rgba(45, 33, 58, 0.2);
+  --pause-live-panel-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+
+  --pause-live-state-min-width: 60px;
+  --pause-live-state-padding: 4px 8px;
+  --pause-live-state-radius: 999px;
+  --pause-live-state-font-size: 12px;
+  --pause-live-state-letter-spacing: 0.02em;
+
+  --pause-live-live-color: #0b6e4f;
+  --pause-live-live-bg: rgba(11, 110, 79, 0.14);
+  --pause-live-delayed-color: #b54708;
+  --pause-live-delayed-bg: rgba(181, 71, 8, 0.14);
+
+  --pause-live-control-min-width: 70px;
+  --pause-live-buffer-min-width: 70px;
+  --pause-live-buffer-font-size: 12px;
+  --pause-live-buffer-color: #5a4f67;
+  --pause-live-fps-font-size: 11px;
+  --pause-live-fps-color: #2d213a;
+  --pause-live-fps-bg: rgba(45, 33, 58, 0.1);
+}
+
+.pause-live-panel {
+  display: flex;
+  align-items: center;
+  gap: var(--pause-live-panel-gap);
+  padding: var(--pause-live-panel-padding);
+  border-radius: var(--pause-live-panel-radius);
+  background: var(--pause-live-panel-bg);
+  border: 1px solid var(--pause-live-panel-border-color);
+  box-shadow: var(--pause-live-panel-shadow);
+}
+
+.live-state {
+  min-width: var(--pause-live-state-min-width);
+  text-align: center;
+  padding: var(--pause-live-state-padding);
+  border-radius: var(--pause-live-state-radius);
+  font-size: var(--pause-live-state-font-size);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--pause-live-state-letter-spacing);
+}
+
+.live-state--live {
+  color: var(--pause-live-live-color);
+  background: var(--pause-live-live-bg);
+}
+
+.live-state--delayed {
+  color: var(--pause-live-delayed-color);
+  background: var(--pause-live-delayed-bg);
+}
+
+.control-button {
+  min-width: var(--pause-live-control-min-width);
+}
+
+.fps-counter {
+  min-width: 56px;
+  text-align: center;
+  font-size: var(--pause-live-fps-font-size);
+  font-weight: 700;
+  color: var(--pause-live-fps-color);
+  background: var(--pause-live-fps-bg);
+  border-radius: 999px;
+  padding: 4px 8px;
+}
+
+.buffer-count {
+  min-width: var(--pause-live-buffer-min-width);
+  text-align: right;
+  font-size: var(--pause-live-buffer-font-size);
+  color: var(--pause-live-buffer-color);
+}
+
+.buffer-count--hidden {
+  visibility: hidden;
+}

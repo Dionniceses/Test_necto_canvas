@@ -1,0 +1,115 @@
+:host {
+  display: block;
+  pointer-events: auto;
+  width: min(340px, calc(100vw - 40px));
+  --request-popup-border-color: rgba(45, 33, 58, 0.2);
+  --request-popup-background: rgba(255, 255, 255, 0.96);
+  --request-popup-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+  --request-popup-text: #2d213a;
+  --request-popup-title: #271c32;
+  --request-popup-label: #5c4f6b;
+  --request-popup-definition: #3f3350;
+  --request-popup-divider: rgba(45, 33, 58, 0.12);
+  --request-popup-empty: #6f647e;
+}
+
+.request-info-popup {
+  border: 1px solid var(--request-popup-border-color);
+  border-radius: 10px;
+  background: var(--request-popup-background);
+  box-shadow: var(--request-popup-shadow);
+  padding: 10px 12px;
+  color: var(--request-popup-text);
+  animation: request-popup-fade-in 140ms ease-out;
+}
+
+.request-info-popup__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.request-info-popup__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--request-popup-title);
+  overflow-wrap: anywhere;
+}
+
+.request-info-popup__close {
+  flex-shrink: 0;
+}
+
+.request-info-popup__details {
+  margin: 0;
+}
+
+.request-info-popup__row {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  align-items: start;
+  gap: 8px;
+  margin: 6px 0;
+}
+
+.request-info-popup__row dt {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--request-popup-label);
+  text-transform: uppercase;
+}
+
+.request-info-popup__row dd {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.request-info-popup__row--definition dd {
+  color: var(--request-popup-definition);
+}
+
+.request-info-popup__toggle {
+  display: block;
+  margin-top: 8px;
+}
+
+.request-info-popup__details--advanced {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--request-popup-divider);
+}
+
+.request-info-popup__empty {
+  margin: 8px 0 2px;
+  font-size: 12px;
+  color: var(--request-popup-empty);
+}
+
+@media (max-width: 768px) {
+  :host {
+    width: min(320px, calc(100vw - 32px));
+  }
+
+  .request-info-popup__row {
+    grid-template-columns: 84px 1fr;
+  }
+}
+
+@keyframes request-popup-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

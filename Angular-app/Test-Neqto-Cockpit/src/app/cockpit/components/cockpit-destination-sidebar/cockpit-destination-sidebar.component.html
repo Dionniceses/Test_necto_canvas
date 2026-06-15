@@ -1,0 +1,109 @@
+<p-drawer
+  #drawer
+  [visible]="visible()"
+  position="right"
+  [modal]="false"
+  styleClass="cap-sidebar cockpit-box-sidebar"
+  (visibleChange)="onVisibleChange($event)">
+  <div class="cap-sidebar-header">
+    {{ destinationName() }}
+    <i class="fas fa-times" (click)="drawer.close($event)"></i>
+  </div>
+
+  <div class="cap-sidebar-content destination-sidebar-content">
+    @if (sidebarData(); as sidebarData) {
+      <section class="destination-metrics" aria-label="Destination metrics">
+        <div class="metric-card">
+          <p class="metric-card__label">Error rate</p>
+
+          @if (sidebarData.metricsLoading) {
+            <p class="metric-card__value metric-card__value--loading">
+              <i class="fas fa-spinner fa-spin"></i>
+              Loading...
+            </p>
+          } @else {
+            <p class="metric-card__value">{{ sidebarData.errorRatePercentage }}%</p>
+          }
+        </div>
+
+        <div class="metric-card">
+          <p class="metric-card__label">Processed responses (last {{ sidebarData.processedWindowMinutes }} min)</p>
+
+          @if (sidebarData.metricsLoading) {
+            <p class="metric-card__value metric-card__value--loading">
+              <i class="fas fa-spinner fa-spin"></i>
+              Loading...
+            </p>
+          } @else {
+            <p class="metric-card__value">{{ sidebarData.processedResponsesLastWindow }}</p>
+          }
+        </div>
+      </section>
+
+      <details class="dropdown-panel" open>
+        <summary class="dropdown-panel__summary">Last 50 events</summary>
+
+        @if (sidebarData.eventsLoading) {
+          <p class="dropdown-panel__loading">
+            <i class="fas fa-spinner fa-spin"></i>
+            Waiting for events...
+          </p>
+        } @else {
+          <ul class="dropdown-panel__list" role="list">
+            @for (event of sidebarData.events; track event.requestId) {
+              <li class="dropdown-panel__item" (click)="onRequestClick(event.requestId)" style="cursor: pointer">
+                <span class="item-main">Request {{ event.requestId }}</span>
+
+                @if (event.responseCode !== null) {
+                  <span class="item-meta">HTTP {{ event.responseCode }}</span>
+                }
+
+                @if (event.flow) {
+                  <span class="item-meta">Flow {{ event.flow }}</span>
+                }
+
+                <span class="item-meta">{{ event.timestampLabel }}</span>
+              </li>
+            }
+          </ul>
+        }
+      </details>
+
+      <details class="dropdown-panel" open>
+        <summary class="dropdown-panel__summary">Last 20 errors</summary>
+
+        @if (sidebarData.errorsLoading) {
+          <p class="dropdown-panel__loading">
+            <i class="fas fa-spinner fa-spin"></i>
+            Waiting for errors...
+          </p>
+        } @else if (sidebarData.errors.length === 0) {
+          <p class="dropdown-panel__empty">No errors received for this destination yet.</p>
+        } @else {
+          <ul class="dropdown-panel__list" role="list">
+            @for (errorEvent of sidebarData.errors; track errorEvent.requestId) {
+              <li
+                class="dropdown-panel__item dropdown-panel__item--error"
+                (click)="onRequestClick(errorEvent.requestId)"
+                style="cursor: pointer">
+                <span class="item-main">Request {{ errorEvent.requestId }}</span>
+                <span class="item-meta">HTTP {{ errorEvent.responseCode }}</span>
+
+                @if (errorEvent.flow) {
+                  <span class="item-meta">Flow {{ errorEvent.flow }}</span>
+                }
+
+                <span class="item-meta">{{ errorEvent.timestampLabel }}</span>
+              </li>
+            }
+          </ul>
+        }
+      </details>
+    } @else {
+      <p class="destination-sidebar-content__placeholder">
+        <i class="fas fa-spinner fa-spin"></i>
+        Loading destination details...
+      </p>
+    }
+  </div>
+</p-drawer>

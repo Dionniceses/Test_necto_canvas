@@ -1,0 +1,122 @@
+::ng-deep .cap-sidebar.cockpit-box-sidebar {
+  width: min(360px, calc(100vw - 24px)) !important;
+
+  /* Remove default padding so the header banner can span the full width */
+  .p-drawer-content {
+    padding: 0 !important;
+  }
+}
+
+.destination-sidebar-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  /* Restore the padding for the main content area */
+  padding: 1.25rem;
+}
+
+.destination-sidebar-content__placeholder {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: #6f647e;
+  font-size: 13px;
+}
+
+.destination-metrics {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.metric-card {
+  border: 1px solid rgba(45, 33, 58, 0.15);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  padding: 10px;
+}
+
+.metric-card__label {
+  margin: 0;
+  font-size: 12px;
+  color: #5c4f6b;
+}
+
+.metric-card__value {
+  margin: 4px 0 0;
+  font-size: 20px;
+  font-weight: 700;
+  color: #2d213a;
+}
+
+.metric-card__value--loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #6f647e;
+}
+
+.dropdown-panel {
+  border: 1px solid rgba(45, 33, 58, 0.15);
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.dropdown-panel__summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 10px;
+  font-weight: 700;
+  color: #2d213a;
+  background: rgba(45, 33, 58, 0.05);
+}
+
+.dropdown-panel__summary::-webkit-details-marker {
+  display: none;
+}
+
+.dropdown-panel__loading,
+.dropdown-panel__empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 10px;
+  color: #6f647e;
+  font-size: 13px;
+}
+
+.dropdown-panel__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.dropdown-panel__item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px;
+  border-top: 1px solid rgba(45, 33, 58, 0.08);
+}
+
+.dropdown-panel__item--error .item-main {
+  color: #b80e3d;
+}
+
+.item-main {
+  font-size: 13px;
+  font-weight: 700;
+  color: #2d213a;
+}
+
+.item-meta {
+  font-size: 12px;
+  color: #5c4f6b;
+}

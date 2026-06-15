@@ -1,0 +1,24 @@
+<div class="pause-live-panel" role="toolbar" [attr.aria-label]="'cockpit.pause-live.toolbar.aria-label' | translate">
+  <span class="live-state" [class.live-state--live]="isLive()" [class.live-state--delayed]="!isLive()">
+    {{ (isLive() ? 'cockpit.pause-live.state.live' : 'cockpit.pause-live.state.delayed') | translate }}
+  </span>
+
+  <span class="fps-counter" aria-live="polite">{{ fps() }} FPS</span>
+
+  <cap-button
+    class="control-button"
+    styleClass="secondary btn-sm"
+    [label]="(isPaused() ? 'button.unpause' : 'button.pause') | translate"
+    (onClick)="onTogglePause()" />
+
+  <cap-button
+    class="control-button control-button--live"
+    styleClass="primary btn-sm"
+    [label]="'button.go-to-live' | translate"
+    [disabled]="isLive()"
+    (onClick)="onGoLive()" />
+
+  <span class="buffer-count" [class.buffer-count--hidden]="bufferedEventCount() === 0">
+    {{ 'cockpit.pause-live.buffer' | translate: { count: bufferedEventCount() } }}
+  </span>
+</div>

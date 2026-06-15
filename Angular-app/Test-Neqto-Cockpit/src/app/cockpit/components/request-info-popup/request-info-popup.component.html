@@ -1,0 +1,81 @@
+@if (requestDetails(); as details) {
+  <section
+    class="request-info-popup"
+    role="dialog"
+    [attr.aria-label]="'cockpit.request-info-popup.aria-label' | translate"
+    aria-live="polite">
+    <header class="request-info-popup__header">
+      <p class="request-info-popup__title">
+        {{ 'cockpit.request-info-popup.title' | translate: { id: details.id } }}
+      </p>
+
+      <cap-button
+        class="request-info-popup__close"
+        styleClass="secondary btn-sm"
+        [label]="'button.close' | translate"
+        (onClick)="onClose()" />
+    </header>
+
+    <dl class="request-info-popup__details">
+      @if (responseStatusLabel(); as responseStatus) {
+        <div class="request-info-popup__row">
+          <dt>{{ 'cockpit.request-info-popup.http-status' | translate }}</dt>
+          <dd>{{ responseStatus }}</dd>
+        </div>
+      }
+
+      @if (flow(); as flowName) {
+        <div class="request-info-popup__row">
+          <dt>{{ 'cockpit.request-info-popup.flow' | translate }}</dt>
+          <dd>{{ flowName }}</dd>
+        </div>
+      }
+
+      @if (destination(); as destinationName) {
+        <div class="request-info-popup__row">
+          <dt>{{ 'cockpit.request-info-popup.destination' | translate }}</dt>
+          <dd>{{ destinationName }}</dd>
+        </div>
+      }
+    </dl>
+
+    <cap-button
+      class="request-info-popup__toggle"
+      styleClass="secondary btn-sm"
+      [label]="
+        isAdvancedExpanded()
+          ? ('cockpit.request-info-popup.button.hide-advanced' | translate)
+          : ('cockpit.request-info-popup.button.show-advanced' | translate)
+      "
+      (onClick)="onToggleAdvanced()" />
+
+    @if (isAdvancedExpanded()) {
+      <dl class="request-info-popup__details request-info-popup__details--advanced">
+        @if (ttfbDisplay(); as ttfbValue) {
+          <div class="request-info-popup__row">
+            <dt>{{ 'cockpit.request-info-popup.ttfb' | translate }}</dt>
+            <dd>{{ ttfbValue }}</dd>
+          </div>
+        }
+
+        @if (payloadSizeDisplay(); as payloadSizeValue) {
+          <div class="request-info-popup__row">
+            <dt>{{ 'cockpit.request-info-popup.payload-size' | translate }}</dt>
+            <dd>{{ payloadSizeValue }}</dd>
+          </div>
+        }
+
+        @if (responseSizeDisplay(); as responseSizeValue) {
+          <div class="request-info-popup__row">
+            <dt>{{ 'cockpit.request-info-popup.response-size' | translate }}</dt>
+            <dd>{{ responseSizeValue }}</dd>
+          </div>
+        }
+
+        @if (!hasAdvancedDetails()) {
+          <p class="request-info-popup__empty">{{ 'cockpit.request-info-popup.no-advanced-metrics' | translate }}</p>
+        }
+      </dl>
+    }
+  </section>
+}
