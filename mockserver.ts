@@ -12,7 +12,7 @@ const COCKPIT_MOCK_STREAM_PATH_ALIAS = '/api/traffic/stream';
 const HEALTH_PATH = '/health';
 
 const MAX_HISTORY_SIZE = 1000;
-const GENERATION_INTERVAL_MS = 450;
+const GENERATION_INTERVAL_MS = 100;
 const PARALLEL_LIFECYCLES_MIN = 1;
 const PARALLEL_LIFECYCLES_MAX = 3;
 const BASE_JITTER_MAX_MS = 140;
@@ -22,16 +22,16 @@ const FINAL_DELAY_MIN_MS = 110;
 const FINAL_DELAY_MAX_MS = 620;
 const OUT_OF_ORDER_CHANCE = 0.22;
 const RESPONSE_TIMEOUT_MS = 15 * 60 * 1000;
-const LONG_RESPONSE_CHANCE = 0.08;
+const LONG_RESPONSE_CHANCE = 0.000;
 const LONG_RESPONSE_EXTRA_MIN_MS = 1500;
 const LONG_RESPONSE_EXTRA_MAX_MS = 150000;
-const STRESS_ENABLED = process.env.STRESS_ENABLED !== 'false';
-const STRESS_EVENT_MULTIPLIER = Math.floor(readPositiveEnvNumber('STRESS_EVENT_MULTIPLIER', 3000));
-const STRESS_BASE_INTERVAL_MS = Math.floor(readPositiveEnvNumber('STRESS_BASE_INTERVAL_SECONDS', 30) * 1000);
+const STRESS_ENABLED = true;
+const STRESS_EVENT_MULTIPLIER = Math.floor(readPositiveEnvNumber('STRESS_EVENT_MULTIPLIER', 500));
+const STRESS_BASE_INTERVAL_MS = Math.floor(readPositiveEnvNumber('STRESS_BASE_INTERVAL_SECONDS', 60) * 1000);
 const STRESS_INTERVAL_JITTER_MS = Math.floor(readPositiveEnvNumber('STRESS_INTERVAL_JITTER_SECONDS', 10) * 1000);
 const STRESS_DURATION_MS = Math.floor(readPositiveEnvNumber('STRESS_DURATION_SECONDS', 5) * 500);
 
-const RESPONSE_CODES = [200, 201, 204,200, 201, 204,200, 201, 204,200, 201, 204, 404, 400, 403, 429, 500, 501, 503];
+const RESPONSE_CODES = [200, 201, 202, 204, 206,304, 307, 308,409, 410, 422, 429,502, 503,200, 201, 202, 204, 401, 403, 404, 408,  301, 302, 500, 501,400];
 const REQUEST_FIXTURES = [
   {
     destination: 'bol.com',
@@ -350,7 +350,7 @@ const REQUEST_FIXTURES = [
     flow: 'cost-center-sync',
     triggerIp: '10.0.31.89',
     triggerUa: 'Neqto FinOps',
-  },/*  
+  },///*  
   {
     destination: 'azure.microsoft.com',
     flow: 'billing-rollup',
@@ -476,7 +476,7 @@ const REQUEST_FIXTURES = [
     flow: 'route-cache-refresh',
     triggerIp: '10.0.31.110',
     triggerUa: 'Neqto Routing',
-  }*/
+  }//*/
 ];
 
 const streamClients = new Set();
@@ -531,11 +531,11 @@ function scheduleRandomStressWindow() {
 function addCorsHeaders(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Last-Event-ID');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Last-Event-ID,x-tenant-ref');
 }
 
-function toSseFrame(event, eventId) {
-  return `id: ${eventId}\nevent: cockpit-stream\ndata: ${JSON.stringify(event)}\n\n`;
+function toNdjsonFrame(event) {
+  return JSON.stringify(event) + '\n';
 }
 
 function keepOnlyRecentHistory() {
@@ -549,7 +549,7 @@ function broadcastEvent(event) {
   keepOnlyRecentHistory();
 
   sseEventCounter += 1;
-  const frame = toSseFrame(event, sseEventCounter);
+  const frame = toNdjsonFrame(event);
 
   for (const client of streamClients) {
     if (client.writableEnded || client.destroyed) {
@@ -585,21 +585,30 @@ function calculatePayloadSize(requestSequence) {
   return 90 + (requestSequence % 6) * 80;
 }
 
-function calculateTtfbHint(requestSequence) {
-  return 190 + (requestSequence % 5) * 8;
+function calculateTtfbHint(requestSequence, intendedTtfb, isLikelyTimeout = false) {
+  if (isLikelyTimeout) {
+    // Keep timeout-planned requests very close to the 15-minute timeout window.
+    const timeoutOffsetMs = 2000 + (requestSequence % 14) * 500;
+    return Math.max(1, RESPONSE_TIMEOUT_MS - timeoutOffsetMs);
+  }
+
+  // For normal requests, keep the hint tightly aligned with intended actual TTFB.
+  const smallJitterMs = ((requestSequence % 5) - 2) * 4;
+  return Math.max(1, intendedTtfb + smallJitterMs);
 }
 
 function calculateTtfb(requestSequence) {
-    return 4250 + (requestSequence % 6) * 16;
+    return 250 + (requestSequence % 6) * 16;
 }
 
 function calculateResponseSize(requestSequence) {
-  return 11000 + (requestSequence % 7) * 100;
+  return 1800 + (requestSequence % 7) * 100;
 }
 
 function createTimeoutEvent(requestId, requestSequence) {
   return {
     id: requestId,
+    ttfb: 900000,
     response_code: 504,
   };
 }
@@ -630,13 +639,15 @@ function generateRequestLifecycle() {
     finalDelay = RESPONSE_TIMEOUT_MS + randomInt(LONG_RESPONSE_EXTRA_MIN_MS, LONG_RESPONSE_EXTRA_MAX_MS);
   }
 
+  const intendedTtfb = calculateTtfb(requestSequence);
+
   const hintTimeout = setTimeout(() => {
     timeoutIds.delete(hintTimeout);
 
     const hintEvent = {
       id: requestId,
       payload_size: calculatePayloadSize(requestSequence),
-      'ttfb-hint': calculateTtfbHint(requestSequence),
+      'ttfb-hint': calculateTtfbHint(requestSequence, intendedTtfb, isLongResponse),
     };
 
     broadcastEvent(hintEvent);
@@ -659,7 +670,7 @@ function generateRequestLifecycle() {
 
     const finalEvent = {
       id: requestId,
-      ttfb: calculateTtfb(requestSequence),
+      ttfb: intendedTtfb,
       response_size: calculateResponseSize(requestSequence),
       response_code: RESPONSE_CODES[Math.floor(Math.random() * RESPONSE_CODES.length)],
     };
@@ -739,7 +750,7 @@ function handleSseConnection(req, res) {
   addCorsHeaders(res);
 
   res.writeHead(200, {
-    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Content-Type': 'application/x-ndjson; charset=utf-8',
     'Cache-Control': 'no-cache, no-transform',
     Connection: 'keep-alive',
   });
@@ -752,7 +763,7 @@ function handleSseConnection(req, res) {
 
   const keepAliveTimer = setInterval(() => {
     if (!res.writableEnded) {
-      res.write(': keepalive\n\n');
+      res.write(JSON.stringify({ type: 'keepalive' }) + '\n');
     }
   }, 15000);
 
@@ -806,6 +817,77 @@ const server = http.createServer((req, res) => {
       count: eventHistory.length,
       events: eventHistory,
     });
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/mock/cockpit/snapshot') {
+    addCorsHeaders(res);
+
+    const from = Number(url.searchParams.get('from')) || Date.now();
+    const limit = Math.max(1, Number(url.searchParams.get('limit')) || 100);
+    const snapshotId = url.searchParams.get('snapshotId') || null;
+
+    res.writeHead(200, {
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      'Cache-Control': 'no-store',
+      Connection: 'close',
+    });
+
+    // Spread the timestamps between 3 - 10 minutes starting from the recieved 'from' ts.
+    // 'from' is the START of the window. We generate events up to 3-10 minutes AFTER 'from'.
+    const durationMs = randomInt(3 * 60 * 1000, 10 * 60 * 1000);
+    const to = from + durationMs;
+    
+    const events = [];
+    for (let i = 0; i < limit; i += 1) {
+      const frac = limit === 1 ? 0 : i / (limit - 1);
+      // We generate from 'to' down to 'from' so they are already in descending order
+      const ts = Math.round(to - Math.round(durationMs * frac));
+      const fixture = pickNextFixture();
+      // Ensure unique ID for snapshot events
+      const id = to * 1000 + i;
+      const snapshotTtfb = calculateTtfb(i);
+      
+      const ev = {
+        id,
+        ts,
+        destination: fixture.destination,
+        flow: fixture.flow,
+        flow_execution_id: `fx-${ts}-${i}`,
+        trigger_ua: fixture.triggerUa,
+        trigger_ip: fixture.triggerIp,
+        payload_size: calculatePayloadSize(i),
+        'ttfb-hint': calculateTtfbHint(i, snapshotTtfb, false),
+        ttfb: snapshotTtfb,
+        response_size: calculateResponseSize(i),
+        response_code: RESPONSE_CODES[i % RESPONSE_CODES.length],
+      };
+
+      events.push(ev);
+    }
+
+    // historical data is sent from most recent to oldest.
+    // The loop above generated them starting from 'to' (most recent) down to 'from' (oldest).
+    for (const event of events) {
+      try {
+        res.write(JSON.stringify(event) + '\n');
+      } catch (err) {
+        break;
+      }
+    }
+
+    const complete = { 
+      type: 'snapshot-complete', 
+      snapshotId, 
+      range: { fromTs: from, toTs: to }, 
+      count: events.length 
+    };
+    try {
+      res.write(JSON.stringify(complete) + '\n');
+    } catch {}
+    try {
+      res.end();
+    } catch {}
     return;
   }
 
@@ -865,3 +947,4 @@ server.listen(PORT, () => {
 
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
+
