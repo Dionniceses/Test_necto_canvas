@@ -1,0 +1,114 @@
+@use '../../styles/cockpit-tokens' as ck;
+
+:host {
+  display: block;
+  pointer-events: auto;
+  width: min(340px, calc(100vw - 40px));
+}
+
+.request-info-popup {
+  border: 1px solid var(--ck-border);
+  border-top: 3px solid var(--ck-pink);
+  border-radius: var(--ck-radius-lg);
+  background: var(--ck-surface);
+  box-shadow: var(--ck-shadow);
+  padding: 12px 14px;
+  color: var(--ck-text);
+  animation: request-popup-fade-in 140ms ease-out;
+}
+
+.request-info-popup__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.request-info-popup__title {
+  margin: 0;
+  font-family: var(--ck-font-mono);
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--ck-text);
+  overflow-wrap: anywhere;
+}
+
+.request-info-popup__close {
+  flex-shrink: 0;
+}
+
+.request-info-popup__details {
+  margin: 0;
+}
+
+.request-info-popup__row {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  align-items: start;
+  gap: 8px;
+  margin: 7px 0;
+}
+
+.request-info-popup__row dt {
+  margin: 0;
+  font-family: var(--ck-font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  color: var(--ck-text-dim);
+  text-transform: uppercase;
+}
+
+.request-info-popup__row dd {
+  margin: 0;
+  font-family: var(--ck-font-mono);
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--ck-text);
+  overflow-wrap: anywhere;
+}
+
+.request-info-popup__row--definition dd {
+  color: var(--ck-text-mid);
+}
+
+.request-info-popup__toggle {
+  display: block;
+  margin-top: 10px;
+}
+
+.request-info-popup__details--advanced {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--ck-border-strong);
+}
+
+.request-info-popup__empty {
+  margin: 8px 0 2px;
+  font-size: 12px;
+  color: var(--ck-text-mid);
+}
+
+@media (max-width: 768px) {
+  :host {
+    width: min(320px, calc(100vw - 32px));
+  }
+
+  .request-info-popup__row {
+    grid-template-columns: 84px 1fr;
+  }
+}
+
+@keyframes request-popup-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

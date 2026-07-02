@@ -1,0 +1,138 @@
+@if (visible()) {
+  <aside class="cap-sidebar cockpit-box-sidebar">
+    <div class="cap-sidebar-header">
+      <div class="header-main">
+        <span class="header-indicator"></span>
+        <div class="header-text">
+          <div class="header-title">{{ destinationName() }}</div>
+          <div class="header-subtitle">egress destination · live</div>
+        </div>
+      </div>
+      <button class="header-close" (click)="onClose()">×</button>
+    </div>
+
+    <div class="cap-sidebar-content destination-sidebar-content">
+      @if (sidebarData(); as sidebarData) {
+        <section
+          class="destination-metrics"
+          [attr.aria-label]="'cockpit.destination-sidebar.metrics.aria-label' | translate">
+          <div class="metric-card">
+            <p class="metric-card__label">{{ 'cockpit.destination-sidebar.error-rate' | translate }}</p>
+
+            @if (sidebarData.metricsLoading) {
+              <p class="metric-card__value metric-card__value--loading">
+                <i class="fas fa-spinner fa-spin"></i>
+                {{ 'component.loading' | translate }}
+              </p>
+            } @else {
+              <p class="metric-card__value">{{ sidebarData.errorRatePercentage }}%</p>
+            }
+          </div>
+
+          <div class="metric-card">
+            <p class="metric-card__label">
+              {{
+                'cockpit.destination-sidebar.processed-responses-window'
+                  | translate: { minutes: sidebarData.processedWindowMinutes }
+              }}
+            </p>
+
+            @if (sidebarData.metricsLoading) {
+              <p class="metric-card__value metric-card__value--loading">
+                <i class="fas fa-spinner fa-spin"></i>
+                {{ 'component.loading' | translate }}
+              </p>
+            } @else {
+              <p class="metric-card__value">{{ sidebarData.processedResponsesLastWindow }}</p>
+            }
+          </div>
+        </section>
+
+        <details class="dropdown-panel" open>
+          <summary class="dropdown-panel__summary">
+            {{ 'cockpit.destination-sidebar.last-events' | translate: { count: 50 } }}
+          </summary>
+
+          @if (sidebarData.eventsLoading) {
+            <p class="dropdown-panel__loading">
+              <i class="fas fa-spinner fa-spin"></i>
+              {{ 'cockpit.destination-sidebar.waiting-for-events' | translate }}
+            </p>
+          } @else {
+            <ul class="dropdown-panel__list" role="list">
+              @for (event of sidebarData.events; track event.requestId) {
+                <li
+                  class="dropdown-panel__item"
+                  [class.dropdown-panel__item--success]="event.responseCode | httpStatus: 'success'"
+                  [class.dropdown-panel__item--other]="event.responseCode | httpStatus: 'amber'"
+                  [class.dropdown-panel__item--error]="event.responseCode | httpStatus: 'error'"
+                  (click)="onRequestClick(event.requestId)"
+                  style="cursor: pointer">
+                  <span class="item-main">{{
+                    'cockpit.request-info-popup.title' | translate: { id: event.requestId }
+                  }}</span>
+
+                  @if (event.responseCode !== null) {
+                    <span class="item-meta">
+                      {{ 'cockpit.destination-sidebar.http-code' | translate: { code: event.responseCode } }}
+                    </span>
+                  }
+
+                  @if (event.flow) {
+                    <span class="item-meta">{{ 'cockpit.request-info-popup.flow' | translate }} {{ event.flow }}</span>
+                  }
+
+                  <span class="item-meta">{{ event.timestampLabel }}</span>
+                </li>
+              }
+            </ul>
+          }
+        </details>
+
+        <details class="dropdown-panel" open>
+          <summary class="dropdown-panel__summary">
+            {{ 'cockpit.destination-sidebar.last-errors' | translate: { count: 20 } }}
+          </summary>
+
+          @if (sidebarData.errorsLoading) {
+            <p class="dropdown-panel__loading">
+              <i class="fas fa-spinner fa-spin"></i>
+              {{ 'cockpit.destination-sidebar.waiting-for-errors' | translate }}
+            </p>
+          } @else if (sidebarData.errors.length === 0) {
+            <p class="dropdown-panel__empty">{{ 'cockpit.destination-sidebar.no-errors' | translate }}</p>
+          } @else {
+            <ul class="dropdown-panel__list" role="list">
+              @for (errorEvent of sidebarData.errors; track errorEvent.requestId) {
+                <li
+                  class="dropdown-panel__item dropdown-panel__item--error"
+                  (click)="onRequestClick(errorEvent.requestId)"
+                  style="cursor: pointer">
+                  <span class="item-main">
+                    {{ 'cockpit.request-info-popup.title' | translate: { id: errorEvent.requestId } }}
+                  </span>
+                  <span class="item-meta">
+                    {{ 'cockpit.destination-sidebar.http-code' | translate: { code: errorEvent.responseCode } }}
+                  </span>
+
+                  @if (errorEvent.flow) {
+                    <span class="item-meta"
+                      >{{ 'cockpit.request-info-popup.flow' | translate }} {{ errorEvent.flow }}</span
+                    >
+                  }
+
+                  <span class="item-meta">{{ errorEvent.timestampLabel }}</span>
+                </li>
+              }
+            </ul>
+          }
+        </details>
+      } @else {
+        <p class="destination-sidebar-content__placeholder">
+          <i class="fas fa-spinner fa-spin"></i>
+          {{ 'cockpit.destination-sidebar.loading-details' | translate }}
+        </p>
+      }
+    </div>
+  </aside>
+}

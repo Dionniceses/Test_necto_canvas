@@ -9,8 +9,10 @@ export const routes: Routes = [
   { path: 'webgl', component: WebGLComponent },
   { path: 'canvas2d', component: Canvas2dComponent },
   { path: 'pixi', component: PixiComponent },
+  /*
   {
     path: 'cockpit',
     loadChildren: () => import('./cockpit/routes').then((m) => m.routes),
   },
+  */
 ];

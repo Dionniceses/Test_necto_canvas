@@ -12,7 +12,7 @@ const COCKPIT_MOCK_STREAM_PATH_ALIAS = '/api/traffic/stream';
 const HEALTH_PATH = '/health';
 
 const MAX_HISTORY_SIZE = 1000;
-const GENERATION_INTERVAL_MS = 100;
+const GENERATION_INTERVAL_MS = 50;
 const PARALLEL_LIFECYCLES_MIN = 1;
 const PARALLEL_LIFECYCLES_MAX = 3;
 const BASE_JITTER_MAX_MS = 140;
@@ -25,9 +25,9 @@ const RESPONSE_TIMEOUT_MS = 15 * 60 * 1000;
 const LONG_RESPONSE_CHANCE = 0.000;
 const LONG_RESPONSE_EXTRA_MIN_MS = 1500;
 const LONG_RESPONSE_EXTRA_MAX_MS = 150000;
-const STRESS_ENABLED = true;
-const STRESS_EVENT_MULTIPLIER = Math.floor(readPositiveEnvNumber('STRESS_EVENT_MULTIPLIER', 500));
-const STRESS_BASE_INTERVAL_MS = Math.floor(readPositiveEnvNumber('STRESS_BASE_INTERVAL_SECONDS', 60) * 1000);
+const STRESS_ENABLED = false;
+const STRESS_EVENT_MULTIPLIER = Math.floor(readPositiveEnvNumber('STRESS_EVENT_MULTIPLIER', 200));
+const STRESS_BASE_INTERVAL_MS = Math.floor(readPositiveEnvNumber('STRESS_BASE_INTERVAL_SECONDS', 30) * 1000);
 const STRESS_INTERVAL_JITTER_MS = Math.floor(readPositiveEnvNumber('STRESS_INTERVAL_JITTER_SECONDS', 10) * 1000);
 const STRESS_DURATION_MS = Math.floor(readPositiveEnvNumber('STRESS_DURATION_SECONDS', 5) * 500);
 
@@ -92,7 +92,7 @@ const REQUEST_FIXTURES = [
     flow: 'auth-check',
     triggerIp: '10.0.31.46',
     triggerUa: 'Edge/124.0',
-  },///*
+  },/*
   {
     destination: 'adyen.com',
     flow: 'payment-reconcile',
@@ -350,7 +350,7 @@ const REQUEST_FIXTURES = [
     flow: 'cost-center-sync',
     triggerIp: '10.0.31.89',
     triggerUa: 'Neqto FinOps',
-  },///*  
+  },/*  
   {
     destination: 'azure.microsoft.com',
     flow: 'billing-rollup',

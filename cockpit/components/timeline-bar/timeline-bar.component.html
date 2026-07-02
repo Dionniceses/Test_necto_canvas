@@ -1,0 +1,34 @@
+<div class="timeline">
+  <div
+    class="timeline__track-area"
+    (mousemove)="onTrackMouseMove($event)"
+    (mouseleave)="onTrackMouseLeave()"
+    (pointerdown)="onTrackPointerDown($event)"
+    (pointermove)="onTrackPointerMove($event)"
+    (pointerup)="onTrackPointerUp($event)"
+    (pointercancel)="onTrackPointerCancel($event)">
+    <div class="timeline__track-bg"></div>
+
+    @for (segment of downloadedSegments(); track segment.id) {
+      <div class="timeline__downloaded-segment" [style.left.%]="segment.left" [style.width.%]="segment.width"></div>
+    }
+
+    <button
+      class="timeline__live-marker"
+      type="button"
+      [style.left.%]="livePercent()"
+      title="Live"
+      (click)="onGoLive()"></button>
+
+    @if (hoverPercent() !== null) {
+      <div class="timeline__hover-marker" [style.left.%]="hoverPercent()">
+        <span class="timeline__hover-tooltip">{{ hoverTime() }}</span>
+        <div class="timeline__hover-needle"></div>
+      </div>
+    }
+
+    <div class="timeline__playhead" [style.left.%]="playheadPercent()">
+      <span class="timeline__playhead-time">{{ playheadTime() }}</span>
+    </div>
+  </div>
+</div>

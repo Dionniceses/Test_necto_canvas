@@ -1,0 +1,18 @@
+<div class="time-multiplier-panel" role="group" [attr.aria-label]="'cockpit.time-multiplier.aria-label' | translate">
+  <label class="time-multiplier-label" for="cockpit-time-multiplier">
+    {{ 'cockpit.time-multiplier.label' | translate }}
+  </label>
+
+  <input
+    id="cockpit-time-multiplier"
+    class="time-multiplier-slider"
+    type="range"
+    [attr.aria-valuetext]="multiplierLabel()"
+    [min]="minMultiplier"
+    [max]="maxMultiplier"
+    [step]="step"
+    [value]="divider()"
+    (input)="onMultiplierInput($event)" />
+
+  <output class="time-multiplier-value" for="cockpit-time-multiplier">{{ multiplierLabel() }}</output>
+</div>

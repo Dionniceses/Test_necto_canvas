@@ -1,0 +1,13 @@
+<div class="date-picker-wrapper">
+  <button class="arrow-btn prev-btn" (click)="previousDay()" [disabled]="isPreviousDayDisabled()" title="Vorige dag">
+    <i class="fas fa-chevron-left"></i>
+  </button>
+  <p-date-picker
+    [formControl]="selectedDate"
+    [minDate]="minDate()"
+    [maxDate]="maxDate"
+    placeholder="Selecteer een datum" />
+  <button class="arrow-btn next-btn" (click)="nextDay()" [disabled]="isNextDayDisabled()" title="Volgende dag">
+    <i class="fas fa-chevron-right"></i>
+  </button>
+</div>

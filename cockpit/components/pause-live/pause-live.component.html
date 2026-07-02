@@ -1,0 +1,35 @@
+<div class="pause-live-panel" role="toolbar" [attr.aria-label]="'cockpit.pause-live.toolbar.aria-label' | translate">
+  <div class="live-status">
+    <span
+      class="live-status__indicator"
+      [class.live-status__indicator--live]="isLive() && isConnected()"
+      [class.live-status__indicator--paused]="isPaused() && isConnected()"
+      [class.live-status__indicator--offline]="isLive() && !isConnected()"></span>
+    <span class="live-status__label">
+      {{
+        (isLive() && !isConnected()
+          ? 'cockpit.pause-live.state.offline'
+          : isPaused()
+            ? 'cockpit.pause-live.state.paused'
+            : isLive()
+              ? 'cockpit.pause-live.state.live'
+              : 'cockpit.pause-live.state.delayed'
+        ) | translate
+      }}
+    </span>
+  </div>
+
+  <button class="control-button" (click)="onTogglePause()">
+    <i class="fas" [class.fa-play]="isPaused()" [class.fa-pause]="!isPaused()"></i>
+    {{ (isPaused() ? 'button.unpause' : 'button.pause') | translate }}
+  </button>
+
+  @if (!isLive()) {
+    <button class="control-button control-button--live" (click)="onGoLive()">
+      <i class="fas fa-bolt"></i>
+      {{ 'button.go-to-live' | translate }}
+    </button>
+  }
+
+  <span class="fps-counter">{{ fps() }} FPS</span>
+</div>

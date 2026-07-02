@@ -1,0 +1,81 @@
+@use '../../styles/cockpit-tokens' as ck;
+
+.pause-live-panel {
+  display: flex;
+  align-items: center;
+  background: var(--ck-surface);
+  border: 1px solid var(--ck-border);
+  border-radius: var(--ck-radius);
+  overflow: hidden;
+  font-family: var(--ck-font-mono);
+}
+
+.live-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-right: 1px solid var(--ck-border);
+
+  &__indicator {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--ck-text-dim);
+
+    &--live {
+      background: var(--ck-green);
+      box-shadow: 0 0 0 3px var(--ck-green-soft);
+    }
+
+    &--paused {
+      background: var(--ck-text-dim);
+    }
+
+    &--offline {
+      background: var(--ck-red);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--ck-red) 20%, transparent);
+    }
+  }
+
+  &__label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ck-text-mid);
+  }
+}
+
+.control-button {
+  all: unset;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ck-pink);
+  cursor: pointer;
+  transition: background 120ms ease;
+
+  &:hover {
+    background: var(--ck-pink-tint);
+  }
+
+  i {
+    font-size: 11px;
+  }
+
+  &--live {
+    border-left: 1px solid var(--ck-border);
+  }
+}
+
+.fps-counter {
+  padding: 0 12px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--ck-text-dim);
+  border-left: 1px solid var(--ck-border);
+}

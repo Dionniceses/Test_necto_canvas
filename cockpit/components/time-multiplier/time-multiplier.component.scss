@@ -1,0 +1,42 @@
+@use '../../styles/cockpit-tokens' as ck;
+
+:host {
+  display: block;
+}
+
+.time-multiplier-panel {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  user-select: none;
+}
+
+.time-multiplier-label {
+  font-family: var(--ck-font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ck-text-dim);
+  white-space: nowrap;
+}
+
+.time-multiplier-value {
+  min-width: 38px;
+  text-align: right;
+  font-family: var(--ck-font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--ck-pink);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.time-multiplier-slider {
+  width: 100%;
+  min-width: 92px;
+  accent-color: var(--ck-pink);
+}

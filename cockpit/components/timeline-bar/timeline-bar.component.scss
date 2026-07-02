@@ -1,0 +1,150 @@
+@use '../../styles/cockpit-tokens' as ck;
+
+:host {
+  display: block;
+  width: auto;
+
+  // Dimensions
+  --track-h: 4px;
+  --track-h-hover: 6px;
+  --playhead-size: 14px;
+
+  // Colors
+  --color-playhead: #e53935;
+  --color-track-fill: #e53935;
+  --color-track-bg: rgba(0, 0, 0, 0.15);
+  --color-bg-primary: rgba(255, 255, 255, 0.92);
+  --color-border: rgba(0, 0, 0, 0.1);
+  --color-hover-needle: rgba(0, 0, 0, 0.3);
+  --color-tooltip-bg: rgba(15, 15, 15, 0.82);
+  --color-tooltip-text: #fff;
+}
+
+.timeline {
+  padding: 10px 0;
+  user-select: none;
+}
+
+// ─── Track area ───────────────────────────────────────────────────────────────
+
+.timeline__track-area {
+  position: relative;
+  height: 40px;
+  cursor: pointer;
+  overflow: visible;
+  touch-action: none;
+
+  &:hover {
+    .timeline__track-bg,
+    .timeline__downloaded-segment {
+      height: var(--track-h-hover);
+    }
+
+    .timeline__playhead {
+      transform: translate(-50%, -50%) scale(1.25);
+    }
+  }
+}
+
+.timeline__track-bg,
+.timeline__downloaded-segment {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  height: var(--track-h);
+  border-radius: 3px;
+  transition: height 120ms ease;
+  pointer-events: none;
+}
+
+.timeline__track-bg {
+  left: 0;
+  right: 0;
+  background: var(--ck-border);
+}
+
+.timeline__downloaded-segment {
+  background: var(--ck-pink);
+}
+
+.timeline__live-marker {
+  position: absolute;
+  top: 50%;
+  width: 10px;
+  height: 18px;
+  transform: translate(-50%, -50%);
+  padding: 0;
+  border: 2px solid var(--ck-surface);
+  border-radius: 5px;
+  background: var(--ck-text);
+  box-shadow: 0 1px 5px rgba(20, 25, 38, 0.35);
+  cursor: pointer;
+}
+
+// ─── Hover marker ────────────────────────────────────────────────────────────
+
+.timeline__hover-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.timeline__hover-needle {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  transform: translateX(-50%);
+  background: var(--color-hover-needle);
+  border-radius: 1px;
+}
+
+.timeline__hover-tooltip {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--ck-text);
+  color: #fff;
+  font-family: var(--ck-font-mono);
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 3px 7px;
+  border-radius: 4px;
+  white-space: nowrap;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+// ─── Playhead (on the line, right edge) ──────────────────────────────────────
+
+.timeline__playhead {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: var(--playhead-size);
+  height: var(--playhead-size);
+  background: var(--ck-pink);
+  border: 2px solid var(--ck-surface);
+  border-radius: 50%;
+  box-shadow: 0 1px 5px rgba(229, 36, 125, 0.55);
+  transition: transform 120ms ease;
+  pointer-events: none;
+}
+
+.timeline__playhead-time {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: var(--ck-font-mono);
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--ck-pink-strong);
+  white-space: nowrap;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}

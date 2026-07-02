@@ -1,0 +1,61 @@
+@use '../../styles/cockpit-tokens' as ck;
+
+:host {
+  display: block;
+}
+
+.date-picker-wrapper {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0;
+  user-select: none;
+
+  .arrow-btn {
+    background: var(--ck-page-bg);
+    border: 1px solid var(--ck-border);
+    padding: 0.5rem 0.75rem;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: all 0.15s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--ck-text-mid);
+    min-width: 34px;
+    height: 34px;
+
+    &:hover:not(.disabled) {
+      background-color: var(--ck-pink-soft);
+      border-color: var(--ck-pink);
+      color: var(--ck-pink-strong);
+    }
+
+    &:active:not(.disabled) {
+      background-color: var(--ck-pink-tint);
+    }
+
+    &.disabled,
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.4;
+      color: var(--ck-text-dim);
+      border-color: var(--ck-border);
+      background-color: transparent;
+    }
+
+    i {
+      font-size: 0.85rem;
+    }
+  }
+
+  p-date-picker {
+    flex-shrink: 0;
+    position: relative;
+
+    ::ng-deep .p-datepicker-panel {
+      left: 50% !important;
+      translate: -50%;
+    }
+  }
+}

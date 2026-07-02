@@ -1,0 +1,50 @@
+<div class="cockpit-layout">
+  <header class="cockpit-layout__header">
+    <div class="header-left">
+      <app-advanced-settings [fps]="currentFps()" />
+    </div>
+
+    <div class="header-right">
+      @if (isBuffering()) {
+        <i class="fas fa-spinner fa-spin buffering-spinner" aria-hidden="true"></i>
+      }
+      <app-pause-live
+        [isPaused]="isPaused()"
+        [isLive]="isLive()"
+        [isConnected]="isConnected()"
+        [fps]="currentFps()"
+        (pauseToggled)="onTogglePause()"
+        (goLive)="onGoLive()" />
+    </div>
+  </header>
+
+  <main class="cockpit-layout__body">
+    <div class="topology-pane">
+      <app-pixi-canvas (destinationSelected)="onDestinationSelected($event)" />
+      <app-request-info-popup class="request-info-overlay" />
+    </div>
+
+    <app-cockpit-destination-sidebar
+      [visible]="destinationSidebarVisible()"
+      [destinationName]="selectedDestinationName()"
+      (visibleChange)="onDestinationSidebarVisibleChange($event)"
+      (closed)="onDestinationSidebarVisibleChange(false)" />
+  </main>
+
+  <footer class="cockpit-layout__footer">
+    <div class="footer-controls">
+      <app-datepicker [selectedDateValue]="selectedDate()" (dateChange)="onDateChange($event)" />
+      <app-time-multiplier />
+    </div>
+
+    <app-timeline-bar
+      [availableRange]="availableRange()"
+      [downloadedRanges]="downloadedRanges()"
+      [playheadTs]="playheadTs()"
+      [liveTs]="liveTs()"
+      (scrubStart)="onTimelineScrubStart()"
+      (scrub)="onTimelineScrub($event)"
+      (scrubEnd)="onTimelineScrubEnd($event)"
+      (goLive)="onGoLive()" />
+  </footer>
+</div>

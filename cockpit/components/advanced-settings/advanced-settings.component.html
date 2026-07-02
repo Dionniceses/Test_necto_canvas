@@ -1,0 +1,88 @@
+<div class="advanced-settings-select" [class.active]="isOpen()">
+  <button class="control-button" (click)="settingsPanel.toggle($event)">
+    <i class="fas fa-gear"></i>
+  </button>
+</div>
+
+<p-overlayPanel
+  #settingsPanel
+  styleClass="advanced-settings-panel"
+  appendTo="body"
+  [dismissable]="false"
+  [showCloseIcon]="false"
+  (onShow)="isOpen.set(true)"
+  (onHide)="isOpen.set(false)">
+  <div class="settings-menu">
+    <div class="settings-menu__header">
+      <h5 class="settings-menu__title">{{ 'cockpit.settings.title' | translate }}</h5>
+      <button class="settings-menu__close" (click)="settingsPanel.hide()">×</button>
+    </div>
+
+    <div class="settings-menu__content">
+      <div class="settings-menu__fps-row">
+        <span class="fps-label">{{ 'cockpit.settings.fps' | translate }}</span>
+        <span class="fps-value">{{ fps() }} FPS</span>
+      </div>
+
+      <div class="settings-menu__section">
+        <div class="setting-row">
+          <span class="setting-label">{{ 'cockpit.settings.popup' | translate }}</span>
+          <p-checkbox
+            [ngModel]="settingService.advancedinfo()"
+            [binary]="true"
+            inputId="showAdvanced"
+            (onChange)="showAdvancedPopup($event.checked)" />
+        </div>
+
+        <div class="setting-row">
+          <span class="setting-label">{{ 'cockpit.settings.colorpicker' | translate }}</span>
+          <cap-color-picker
+            [ngModel]="settingService.backgroundcolor()"
+            [displayInput]="true"
+            [placeholder]="settingService.backgroundcolor()"
+            (changeColor)="changeBackgroundColor($event)" />
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-label-group">
+            <span class="setting-label">{{ 'cockpit.settings.boxformula' | translate }}</span>
+            <span class="setting-value">{{ settingService.boxplacementformula() }}</span>
+          </div>
+          <p-slider
+            [ngModel]="settingService.boxplacementformula()"
+            [min]="BOX_PLACEMENT_FORMULA_MIN"
+            [max]="BOX_PLACEMENT_FORMULA_MAX"
+            (onChange)="changeBoxPlacementFormula($event.value)"
+            class="settings-slider" />
+        </div>
+
+        <div class="setting-row">
+          <span class="setting-label">{{ 'cockpit.settings.controlsnapshotsize' | translate }}</span>
+          <cap-input-number
+            [ngModel]="settingService.controlsnapshotsize()"
+            [min]="CONTROL_SNAPSHOT_SIZE_MIN"
+            [max]="CONTROL_SNAPSHOT_SIZE_MAX"
+            [step]="10"
+            [showButtons]="true"
+            (ngModelChange)="changeSnapshotSize($event)"
+            class="settings-input-number" />
+        </div>
+
+        <div class="setting-row flex-column align-stretch">
+          <span class="setting-label">{{ 'cockpit.settings.performancemode' | translate }}</span>
+          <p-selectbutton
+            [options]="performanceMode"
+            [ngModel]="settingService.performance()"
+            (ngModelChange)="changePerformanceMode($event)"
+            optionLabel="label"
+            optionValue="value"
+            styleClass="w-full mt-1" />
+        </div>
+      </div>
+
+      <cap-button class="settings-reset-button" (click)="resetSettings()">
+        {{ 'cockpit.settings.button.reset' | translate }}
+      </cap-button>
+    </div>
+  </div>
+</p-overlayPanel>
